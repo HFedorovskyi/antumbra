@@ -1,6 +1,108 @@
-# Antumbra — форк Shadow для iOS 15–18
+# Antumbra — hardened fork of Shadow (iOS 15–18)
 
-**[Русский](#русский) · [English](#english)**
+**[English](#english) · [Русский](#русский)**
+
+---
+
+## English
+
+Antumbra is a fork of [Shadow](https://github.com/jjolano/shadow) © 2023 jjolano
+(BSD-3-Clause): a jailbreak detection bypass hardened for iOS 15–18 and rootless
+Dopamine, with its own **English / Russian** pane language switch. Ships as
+`me.fedorovskyi.antumbra` (`4.1.0`).
+
+Not affiliated with, sponsored by or endorsed by the original author. The core's
+internal names (Shadow.framework, ShadowCore.dylib, Shadow.dylib, the
+`me.jjolano.shadow` prefs domain) are kept so verified injection lanes and
+existing installations keep working. Licensed BSD-3-Clause, see
+[LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+### What this fork adds
+
+* A dedicated pane-language switch: **English** (default) and **Russian**; the
+  choice lives in `UILanguage` and ignores the system locale, so a Russian
+  device no longer forces a Russian pane.
+* New Antumbra name and icon, its own package identifier
+  `me.fedorovskyi.antumbra` and launchd labels.
+* Extra adapters for third-party detection SDKs and a shared filesystem/system
+  query layer for iOS 18.
+* Root-side `shdwbl` daemon and CLI: per-app opt-out (`addb`/`removeb`/`status`),
+  Dopamine ProcessBlacklist reconciliation, package snapshots and rollback.
+* Rootless build: thin arm64 payload, arm64e preference bundle with
+  authenticated ObjC class references (iOS 18 otherwise traps in `readClass`),
+  enforced by `scripts/check-objc-binds.py` in CI.
+* Every release deb carries the license text
+  (`/var/jb/usr/share/doc/me.fedorovskyi.antumbra/copyright`) and a
+  `Core Author: jjolano` row on the About page.
+
+### Install
+
+Grab the `.deb` from [Releases](https://github.com/HFedorovskyi/antumbra/releases)
+and install it with Sileo/Zebra/Filza or `dpkg -i`. Needs `AltList` + `libSandy`
+(opa334) and `HookKit >= 3.0.4` (jjolano); `Injection Foundation` (PoomSmart) is
+recommended.
+
+* From upstream `me.jjolano.shadow` Antumbra installs directly: the package
+  declares `Provides`/`Replaces`/`Conflicts` and replaces it without `--force`.
+* From the previous fork `me.fedorovskyi.shadow` (4.0.39~hf1 and older), remove
+  the old package first: `dpkg -r me.fedorovskyi.shadow`, then install
+  `me.fedorovskyi.antumbra`. The old package's own conflict against the shared
+  `Provides` makes a plain `dpkg -i` over it fail.
+* Settings and exception lists are kept; the prefs domain is unchanged. If
+  `dpkg -l` shows `rc  me.fedorovskyi.shadow` or `ic  me.jjolano.shadow`,
+  clear the record with `dpkg -P <name>`.
+
+### Use
+
+Settings → Antumbra. Global switches and per-app settings; the pane language is
+switched there as well (English by default). `shdw -d` keeps the app ruleset in
+sync.
+
+### Compatibility
+
+| Lane | Package | iOS | Tested |
+| --- | --- | --- | --- |
+| Rootless | `iphoneos-arm64` | **15.0 – 18.x** | 18.6.2, Dopamine 3 |
+| Rootful modern | `iphoneos-arm` | 14.0 – 18.x | not tested |
+| RootHide | `iphoneos-arm64e` | 15.0 – 17.x | not tested |
+| Rootful legacy | `iphoneos-arm` (`me.fedorovskyi.antumbra.legacy`) | 9.0 – 13.x | not tested |
+
+Ranges come from the control files: rootless and rootful-modern declare
+`firmware (>= …)` with no ceiling and include iOS 18, RootHide is capped at
+`<< 18.0`, rootful-legacy is `9.0 – 13.x`. Only the rootless lane is tested on a
+device, on iOS 18.6.2 (Dopamine 3): pane, watcher, blacklistd, injection into
+third-party apps. The other lanes are built in CI and pass metadata and Mach-O
+checks but have not been tested on live devices; an open-ended range does not
+promise support for future iOS releases.
+
+### Troubleshooting
+
+* Disable other tweaks per-app (Choicy).
+* Downgrade the app; don't stack multiple bypass tweaks.
+* Rootless/semi-untethered: test in stock jailed state to isolate.
+
+### Building
+
+Requires [Theos](https://theos.dev) and the `modern21` toolchain for the arm64e
+preference bundle:
+
+```sh
+MODERN_TOOLCHAIN=/opt/theos/toolchain/modern21/linux/iphone \
+    /opt/theos/bin/setup-modern-toolchain.sh /usr/bin/clang-21
+.github/scripts/build-deps.sh rootless
+./build.sh rootless
+```
+
+Lanes: `rootful-legacy`, `rootful-modern`, `rootless`, `roothide`. See
+`build-support/lanes.sh` for the matrix. Tests: `make -C tests test`
+([details](tests/README.md)).
+
+### Legal
+
+Upstream code: Copyright (c) 2023, jjolano, BSD 3-Clause. Fork modifications:
+Copyright (c) 2026, HRYHORII FEDOROVSKYI, same license. See [LICENSE](LICENSE)
+and [NOTICE](NOTICE); the notice, conditions and disclaimer are also shipped
+inside every package.
 
 ---
 
@@ -104,105 +206,3 @@ MODERN_TOOLCHAIN=/opt/theos/toolchain/modern21/linux/iphone \
 Copyright (c) 2026, HRYHORII FEDOROVSKYI, та же лицензия. См. [LICENSE](LICENSE)
 и [NOTICE](NOTICE); текст лицензии, условия и отказ от гарантий также лежат
 внутри каждого пакета.
-
----
-
-## English
-
-Antumbra is a fork of [Shadow](https://github.com/jjolano/shadow) © 2023 jjolano
-(BSD-3-Clause): a jailbreak detection bypass hardened for iOS 15–18 and rootless
-Dopamine, with its own **English / Russian** pane language switch. Ships as
-`me.fedorovskyi.antumbra` (`4.1.0`).
-
-Not affiliated with, sponsored by or endorsed by the original author. The core's
-internal names (Shadow.framework, ShadowCore.dylib, Shadow.dylib, the
-`me.jjolano.shadow` prefs domain) are kept so verified injection lanes and
-existing installations keep working. Licensed BSD-3-Clause, see
-[LICENSE](LICENSE) and [NOTICE](NOTICE).
-
-### What this fork adds
-
-* A dedicated pane-language switch: **English** (default) and **Russian**; the
-  choice lives in `UILanguage` and ignores the system locale, so a Russian
-  device no longer forces a Russian pane.
-* New Antumbra name and icon, its own package identifier
-  `me.fedorovskyi.antumbra` and launchd labels.
-* Extra adapters for third-party detection SDKs and a shared filesystem/system
-  query layer for iOS 18.
-* Root-side `shdwbl` daemon and CLI: per-app opt-out (`addb`/`removeb`/`status`),
-  Dopamine ProcessBlacklist reconciliation, package snapshots and rollback.
-* Rootless build: thin arm64 payload, arm64e preference bundle with
-  authenticated ObjC class references (iOS 18 otherwise traps in `readClass`),
-  enforced by `scripts/check-objc-binds.py` in CI.
-* Every release deb carries the license text
-  (`/var/jb/usr/share/doc/me.fedorovskyi.antumbra/copyright`) and a
-  `Core Author: jjolano` row on the About page.
-
-### Install
-
-Grab the `.deb` from [Releases](https://github.com/HFedorovskyi/antumbra/releases)
-and install it with Sileo/Zebra/Filza or `dpkg -i`. Needs `AltList` + `libSandy`
-(opa334) and `HookKit >= 3.0.4` (jjolano); `Injection Foundation` (PoomSmart) is
-recommended.
-
-* From upstream `me.jjolano.shadow` Antumbra installs directly: the package
-  declares `Provides`/`Replaces`/`Conflicts` and replaces it without `--force`.
-* From the previous fork `me.fedorovskyi.shadow` (4.0.39~hf1 and older), remove
-  the old package first: `dpkg -r me.fedorovskyi.shadow`, then install
-  `me.fedorovskyi.antumbra`. The old package's own conflict against the shared
-  `Provides` makes a plain `dpkg -i` over it fail.
-* Settings and exception lists are kept; the prefs domain is unchanged. If
-  `dpkg -l` shows `rc  me.fedorovskyi.shadow` or `ic  me.jjolano.shadow`,
-  clear the record with `dpkg -P <name>`.
-
-### Use
-
-Settings → Antumbra. Global switches and per-app settings; the pane language is
-switched there as well (English by default). `shdw -d` keeps the app ruleset in
-sync.
-
-### Compatibility
-
-| Lane | Package | iOS | Tested |
-| --- | --- | --- | --- |
-| Rootless | `iphoneos-arm64` | **15.0 – 18.x** | 18.6.2, Dopamine 3 |
-| Rootful modern | `iphoneos-arm` | 14.0 – 18.x | not tested |
-| RootHide | `iphoneos-arm64e` | 15.0 – 17.x | not tested |
-| Rootful legacy | `iphoneos-arm` (`me.fedorovskyi.antumbra.legacy`) | 9.0 – 13.x | not tested |
-
-Ranges come from the control files: rootless and rootful-modern declare
-`firmware (>= …)` with no ceiling and include iOS 18, RootHide is capped at
-`<< 18.0`, rootful-legacy is `9.0 – 13.x`. Only the rootless lane is tested on a
-device, on iOS 18.6.2 (Dopamine 3): pane, watcher, blacklistd, injection into
-third-party apps. The other lanes are built in CI and pass metadata and Mach-O
-checks but have not been tested on live devices; an open-ended range does not
-promise support for future iOS releases.
-
-### Troubleshooting
-
-* Disable other tweaks per-app (Choicy).
-* Downgrade the app; don't stack multiple bypass tweaks.
-* Rootless/semi-untethered: test in stock jailed state to isolate.
-
-### Building
-
-Requires [Theos](https://theos.dev) and the `modern21` toolchain for the arm64e
-preference bundle:
-
-```sh
-MODERN_TOOLCHAIN=/opt/theos/toolchain/modern21/linux/iphone \
-    /opt/theos/bin/setup-modern-toolchain.sh /usr/bin/clang-21
-.github/scripts/build-deps.sh rootless
-./build.sh rootless
-```
-
-Lanes: `rootful-legacy`, `rootful-modern`, `rootless`, `roothide`. See
-`build-support/lanes.sh` for the matrix. Tests: `make -C tests test`
-([details](tests/README.md)).
-
-### Legal
-
-Upstream code: Copyright (c) 2023, jjolano, BSD 3-Clause. Fork modifications:
-Copyright (c) 2026, HRYHORII FEDOROVSKYI, same license. See [LICENSE](LICENSE)
-and [NOTICE](NOTICE); the notice, conditions and disclaimer are also shipped
-inside every package.
