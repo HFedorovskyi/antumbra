@@ -1,0 +1,37 @@
+.theos
+packages/
+build/
+.DS_Store
+.vscode
+tests/harness
+tests/harness.d
+tests/*.gcno
+tests/*.gcda
+tests/*.gcov
+artifacts/
+# HookKit *headers* staged here by the private host harness (its
+# stage-hookkit-headers target) for the GNUstep container, which has no Theos.
+# Shadow's own build never stages here: it resolves HookKit from $THEOS via
+# build-support/hookkit.mk. Never a source checkout.
+vendor/HookKit.framework/
+.detector-deps/
+core
+core.*
+# Stray Swift module blobs a mis-cwd'd build can drop at the repo root.
+/Swift-*.swiftmodule
+__pycache__/
+*.py[cod]
+# Private harness checkout mount (sibling shadow-private repo). Never
+# committed; never force-add. Maintainer-local notes live there too.
+private/
+# Maintainer scratch copies; the real sources live next to them.
+*.pre-*
+*.bak
+*.bak-*
+*.orig
+*.rej
+*.cur
+*.d[0-9]
+src/build-support/
+# Staged by the root Makefile from src/shdwbl/shdwbl.m.
+/packaging/layout/usr/local/bin/shdwbl

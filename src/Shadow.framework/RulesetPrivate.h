@@ -1,0 +1,51 @@
+#ifndef shadow_ruleset_private_h
+#define shadow_ruleset_private_h
+
+#import "Ruleset.h"
+
+// Shadow's own verification bundles (harness, dyld probe, per-test apps) are
+// never ruleset targets: both ruleset generators skip them so a probe app can
+// never restrict its own host. One shared static inline — each TU gets its own
+// copy (the framework emits no symbol for it) and the generators cannot drift
+// apart.
+static inline BOOL IsShadowVerificationBundle(NSString *bundleID) {
+  return [bundleID isEqualToString:@"me.jjolano.shadow.harness"] ||
+         [bundleID isEqualToString:@"me.jjolano.dyldprobe"] ||
+         [bundleID hasPrefix:@"me.jjolano.shadow.test."];
+}
+
+// Framework-internal RulesetEngine layout, shared by Ruleset.m (matching only)
+// and ShadowRulesetCompiler.m (parse/compile/cache/persist). All ivars moved
+// out of the public header + the old Ruleset.m extension so the compiler can
+// install compiled state; @public is scoped to this private header (never
+// shipped, never part of the public API).
+@interface RulesetEngine () {
+@public
+  // Compiled lookup tables (built by the compiler's _compile, mirroring
+  // set_whitelist etc.): prefix rules grouped by parent directory so a path
+  // only compares the prefixes relevant to its own parent, and
+  // FileSystemStructure compiled to two sorted flat arrays — dirs (the
+  // structure keys) and paths (keys + children) — so matching is a binary
+  // search that walks up to the deepest dir (key) and checks the next
+  // component against paths (exact old dict semantics).
+  NSDictionary<NSString *, NSSet<NSString *> *> *dict_whitelist;
+  NSDictionary<NSString *, NSSet<NSString *> *> *dict_blacklist;
+  BOOL whitelist_match_all; // a bare "/" prefix matches every path
+  BOOL blacklist_match_all;
+  NSArray<NSString *> *array_structure_dirs;  // sorted structure keys
+  NSArray<NSString *> *array_structure_paths; // sorted keys + children
+  NSSet<NSString *>
+      *set_bundleids; // C0-3: BlacklistBundleIDs, lowercased at load
+
+  // Compiled sets/predicates (were declared in the public Ruleset.h; moved
+  // here so the compiler can write them).
+  NSSet<NSString *> *set_urlschemes;
+  NSSet<NSString *> *set_whitelist;
+  NSSet<NSString *> *set_blacklist;
+  NSPredicate *pred_whitelist;
+  NSPredicate *pred_blacklist;
+}
+
+@property(copy, nonatomic, readwrite) NSDictionary *payloadDictionary;
+@end
+#endif

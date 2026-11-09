@@ -1,0 +1,22 @@
+"APP_SETTINGS" = "应用设置";
+"CUSTOMIZED" = "自定义设置";
+"APP_STATE_ACCESSIBILITY_FMT" = "%1$@，%2$@";
+"AGGRESSIVE_SETTINGS" = "检测器中和";
+"AGGRESSIVE" = "激进模式";
+"APP_AGGRESSIVE_DESC" = "自然绕过会呈现看似原生的系统环境；激进模式还会强制已知检测器对此应用报告未检测到异常。";
+"RESET_APP" = "重置应用设置";
+"RESET_APP_CONFIRM" = "移除此应用的所有设置并重新跟随全局设置？全局设置和其他应用不会改变。此操作无法撤销。";
+"RESET_CANCEL" = "取消";
+"RESET_APP_FAILED" = "重置未保存";
+"RESET_APP_FAILED_DESC" = "无法保存应用重置。显示的设置可能尚未保存。请再次尝试重置。";
+"RESET_OK" = "好";
+"APP_SETTINGS_DESC" = "为此应用启用 Antumbra。Antumbra 使用内置的绕过配置。";
+
+"ENABLED" = "已启用";
+
+"FOLLOW_GLOBAL" = "跟随全局设置";
+"APP_USES_GLOBAL" = "正在跟随全局设置。关闭以自定义此应用。";
+
+"APP_OPTOUT" = "兼容性";
+"OPTOUT_INJECTION" = "为此 App 关闭注入";
+"APP_OPTOUT_DESC" = "阻止 Antumbra 在启动时向此 App 注入。若 App 在启用 Antumbra 时崩溃或立即退出，请使用此选项。App 仍可运行，但不受 Antumbra 保护。";

@@ -1,0 +1,15 @@
+_OBJC_CLASS_$_Shadow
+_OBJC_METACLASS_$_Shadow
+_OBJC_CLASS_$_ShadowSettings
+_OBJC_METACLASS_$_ShadowSettings
+_OBJC_CLASS_$_SystemRulesGenerator
+_OBJC_METACLASS_$_SystemRulesGenerator
+_shdw_ruleset_generation
+_shdwInternalBusy
+_shdwInstallHarnessSDKFallback
+_SHDWHookPlan
+_SHDWPluginPlan
+_SHDWInstallUnits
+_SHDWPluginRegistry
+_SHDWDefaultHookSettings
+_SHDWHookGroupCapabilityKind

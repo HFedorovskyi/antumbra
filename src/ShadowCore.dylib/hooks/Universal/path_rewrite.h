@@ -1,0 +1,41 @@
+#ifndef shadow_path_rewrite_h
+#define shadow_path_rewrite_h
+
+#include <stddef.h>
+
+// True for a non-NULL POSIX absolute path. Natural rewrite of a relative
+// *at operand is unsafe because its meaning comes from dirfd, not process cwd.
+int shdw_path_is_absolute(const char *path);
+
+// Offset of the byte to munge in a NUL-terminated path string, or
+// (size_t)-1 when there is nothing safe to munge (empty string, trailing
+// slash). The munged byte flips the middle of the FINAL path component to
+// 0x01 (a control char that no real jailbreak-detection target is named
+// with), so any lookup of the rewritten string fails with ENOENT while the
+// string keeps its exact length — the rewrite is strictly in place, no
+// reallocation, no truncation to a different (real) path.
+size_t shdw_path_munge_offset(const char *path);
+
+// Applies the munge in place. Returns 1 when a byte was flipped, 0 when the
+// path had nothing safe to munge.
+int shdw_path_munge_path(char *path);
+// Copies path into scratch and munges the copy; NEVER touches path itself.
+// Returns scratch on success, NULL when the path cannot be rewritten or the
+// copy would not fit. This is the only supported way for the libc hooks to
+// produce a natural-ENOENT spelling: passing the caller's own buffer to
+// shdw_path_munge_path() would corrupt a const argument.
+const char *shdw_path_rewrite_copy(const char *path, char *scratch,
+                                   size_t scratch_size);
+// Commits a privately staged realpath only after policy approval. The source
+// must contain a NUL within capacity; rejection or an invalid source clears
+// only destination[0], so callers must never resolve into destination first.
+int shdw_realpath_buffer_commit(char *destination, const char *source,
+                                size_t capacity, int approved);
+
+// True when the page containing `ptr` is writable (vm_region query). Used
+// before munging so a read-only buffer (e.g. a __TEXT string constant) falls
+// back to the synthetic deny instead of crashing. Mach-only; the pure munge
+// functions above compile anywhere.
+int shdw_path_buf_writable(const char *ptr);
+
+#endif /* shadow_path_rewrite_h */

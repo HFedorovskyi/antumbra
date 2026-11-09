@@ -1,0 +1,214 @@
+#ifndef shadow_jbpath_h
+#define shadow_jbpath_h
+
+#import <Foundation/Foundation.h>
+#include <string.h>
+
+// Stock OS content that merely shares the preboot prefix. iOS 16+ serves the
+// system libraries from a sealed, read-only cryptex mounted at
+// /private/preboot/Cryptexes; dyld reports those images by that path
+// (observed on 18.6.2: /private/preboot/Cryptexes/OS/usr/lib/libobjc-
+// trampolines.dylib). A plain preboot prefix match classified them as
+// jailbreak artifacts, so dlsym answered NULL for every cryptex symbol and
+// libobjc aborted the app in imp_implementationWithBlock ("couldn't dlsym
+// _objc_blockTrampolineImpl"). Nothing writable lives there — the cryptex is
+// sealed — so it can never hold jailbreak content.
+static inline BOOL shdw_is_stock_cryptex_path(const char *_Nullable path) {
+  static const char kCryptex[] = "/private/preboot/Cryptexes";
+  if (!path)
+    return NO;
+  return strncmp(path, kCryptex, sizeof(kCryptex) - 1) == 0 &&
+         (path[sizeof(kCryptex) - 1] == '\0' ||
+          path[sizeof(kCryptex) - 1] == '/');
+}
+
+// Pure matching against a root captured by the caller; never discovers a root.
+static inline BOOL
+shdw_is_restricted_root_with_prefix(const char *_Nullable path,
+                                    const char *_Nullable root) {
+  if (!path || !path[0])
+    return NO;
+  if (shdw_is_stock_cryptex_path(path))
+    return NO;
+  if (strcmp(path, "/private/preboot") == 0)
+    return NO;
+#ifndef SHADOW_ROOTHIDE
+  if (strcmp(path, "/preboot") == 0)
+    return NO;
+#endif
+  if (strncmp(path, "/var/jb", 7) == 0 && (path[7] == '\0' || path[7] == '/'))
+    return YES;
+  if (strncmp(path, "/private/var/jb", 15) == 0 &&
+      (path[15] == '\0' || path[15] == '/'))
+    return YES;
+  if (strncmp(path, "/cores/", 7) == 0)
+    return YES;
+#if defined(SHADOW_ROOTHIDE) || defined(SHADOW_TEST_HARNESS)
+  if (strncmp(path, "/private/preboot", 16) == 0)
+    return YES;
+#else
+  if (strncmp(path, "/private/preboot", 16) == 0 &&
+      (path[16] == '\0' || path[16] == '/'))
+    return YES;
+#endif
+#if defined(SHADOW_TEST_HARNESS) && !defined(SHADOW_ROOTHIDE)
+  if (strncmp(path, "/preboot", 8) == 0)
+    return YES;
+#elif !defined(SHADOW_ROOTHIDE)
+  if (strncmp(path, "/preboot", 8) == 0 && (path[8] == '\0' || path[8] == '/'))
+    return YES;
+#endif
+  size_t length = root ? strlen(root) : 0;
+  if (!length || strncmp(path, root, length) != 0)
+    return NO;
+#if defined(SHADOW_ROOTHIDE) || defined(SHADOW_TEST_HARNESS)
+  return YES;
+#else
+  return root[length - 1] == '/' || path[length] == '\0' || path[length] == '/';
+#endif
+}
+
+// Jailbreak-root path seam. Three rootless conventions exist in the wild:
+// - Rooted (unc0ver/checkra1n rootful): everything lives at the real root.
+// - Legacy rootless (Dopamine/palera1n): fixed /var/jb bootstrap.
+// - roothide: random-named `jbroot`, no /var/jb at all, resolved via
+//   libroothide's jbroot() API.
+//
+// Theos bakes the install prefix into every build via
+// THEOS_PACKAGE_INSTALL_PREFIX ("" rooted, "/var/jb" rootless; the roothide
+// scheme defines SHADOW_ROOTHIDE and links libroothide).
+//
+// Runtime seam (non-roothide, non-harness): probe order
+//   env JBROOT/SHADOW_JBROOT → realpath /var/jb → scan /private/preboot/*/jb →
+//   fallback compile-time prefix
+// Keep JBIsRootless() runtime. Harness and roothide map as before via macros.
+
+#ifdef SHADOW_ROOTHIDE
+#import <roothide.h>
+#define JBPath(p) jbroot(p)
+#define JBIsRootless() YES
+static inline BOOL shdw_is_restricted_root(const char *_Nullable path) {
+  if (!path || !path[0])
+    return NO;
+  if (strcmp(path, "/private/preboot") == 0)
+    return NO;
+  if (shdw_is_restricted_root_with_prefix(path, NULL))
+    return YES;
+  NSString *root = jbroot(@"/");
+  return shdw_is_restricted_root_with_prefix(path,
+                                             [root fileSystemRepresentation]);
+}
+static inline BOOL shdw_is_restricted_root_c(const char *_Nullable path) {
+  return shdw_is_restricted_root(path);
+}
+static inline BOOL
+shdw_path_contains_restricted_root_c(const char *_Nullable path) {
+  if (!path || !path[0])
+    return NO;
+  if (strstr(path, "/var/jb") != NULL)
+    return YES;
+  if (!shdw_is_stock_cryptex_path(path) &&
+      strstr(path, "/private/preboot") != NULL)
+    return YES;
+  if (strstr(path, "/cores/") != NULL)
+    return YES;
+  NSString *root = jbroot(@"/");
+  if (root) {
+    const char *r = [root fileSystemRepresentation];
+    if (r && r[0] && strstr(path, r) != NULL)
+      return YES;
+  }
+  return NO;
+}
+static inline BOOL shdw_is_path_in_restricted_root(NSString *_Nullable path) {
+  return path.length ? shdw_is_restricted_root([path fileSystemRepresentation])
+                     : NO;
+}
+static inline NSString *_Nonnull shdw_jbroot_prefix(void) {
+  return jbroot(@"/");
+}
+
+#elif defined(SHADOW_TEST_HARNESS)
+// Host test harness: no jailbreak, no theos prefix. The harness provides
+// shdw_harness_set_jbpath(nil|fixture) (tests/ShdwPathShim.m) — nil = rooted
+// pass-through, non-nil = rootless fixture mapping.
+#import "ShdwPathShim.h"
+#import <limits.h>
+#import <unistd.h>
+#define JBPath(p) shdw_harness_jbpath(p)
+#define JBIsRootless() shdw_harness_rootless()
+static inline BOOL shdw_is_restricted_root(const char *_Nullable path) {
+  if (!path || !path[0])
+    return NO;
+  if (strcmp(path, "/private/preboot") == 0 || strcmp(path, "/preboot") == 0)
+    return NO;
+  if (shdw_is_restricted_root_with_prefix(path, NULL))
+    return YES;
+  // Harness: fixture jbroot via realpath("/var/jb") wrap
+  char resolved[PATH_MAX];
+  if (realpath("/var/jb", resolved)) {
+    return shdw_is_restricted_root_with_prefix(path, resolved);
+  }
+  return NO;
+}
+static inline BOOL shdw_is_restricted_root_c(const char *_Nullable path) {
+  return shdw_is_restricted_root(path);
+}
+static inline BOOL
+shdw_path_contains_restricted_root_c(const char *_Nullable path) {
+  if (!path || !path[0])
+    return NO;
+  if (strstr(path, "/var/jb") != NULL)
+    return YES;
+  if (!shdw_is_stock_cryptex_path(path)) {
+    if (strstr(path, "/private/preboot") != NULL)
+      return YES;
+    if (strstr(path, "/preboot") != NULL)
+      return YES;
+  }
+  if (strstr(path, "/cores/") != NULL)
+    return YES;
+  char resolved[PATH_MAX];
+  if (realpath("/var/jb", resolved)) {
+    size_t rl = strlen(resolved);
+    if (rl > 0 && strstr(path, resolved) != NULL)
+      return YES;
+  }
+  return NO;
+}
+static inline BOOL shdw_is_path_in_restricted_root(NSString *_Nullable path) {
+  return path.length ? shdw_is_restricted_root([path fileSystemRepresentation])
+                     : NO;
+}
+static inline NSString *_Nonnull shdw_jbroot_prefix(void) {
+  char resolved[PATH_MAX];
+  if (realpath("/var/jb", resolved))
+    return [NSString stringWithUTF8String:resolved];
+  return shdw_harness_rootless() ? @"/var/jb" : @"";
+}
+
+#else
+#ifndef THEOS_PACKAGE_INSTALL_PREFIX
+#define THEOS_PACKAGE_INSTALL_PREFIX ""
+#endif
+
+__attribute__((visibility("default")))
+NSString *_Nullable JBPath(NSString *_Nullable path);
+__attribute__((visibility("default"))) BOOL JBIsRootless(void);
+
+// Single-source restricted-root predicate (Core.m fast-path +
+// RestrictionEngine).
+__attribute__((visibility("default"))) BOOL
+shdw_is_restricted_root(const char *_Nullable path);
+__attribute__((visibility("default"))) BOOL
+shdw_is_path_in_restricted_root(NSString *_Nullable path);
+__attribute__((visibility("default")))
+NSString *_Nonnull shdw_jbroot_prefix(void);
+__attribute__((visibility("default"))) BOOL
+shdw_is_restricted_root_c(const char *_Nullable p);
+__attribute__((visibility("default"))) BOOL
+shdw_path_contains_restricted_root_c(const char *_Nullable p);
+
+#endif
+
+#endif // shadow_jbpath_h

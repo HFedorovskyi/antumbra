@@ -1,0 +1,133 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+# One run per ref: a new push cancels the superseded in-progress run, and
+# PR branches don't double-run against their push.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  THEOS: /opt/theos
+  # HookKit is consumed from the Theos install, not vendored. CI provisions the
+  # pinned commit per lane (tools/release/install-theos.sh <lane> in the HookKit repo)
+  # before building Shadow; local devs manage their own Theos HookKit.
+  HOOKKIT: d1770553fed455d7868a78d2fa7dfc5734ed0cf9
+
+jobs:
+  legacy:
+    name: rootful-legacy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Theos and old-ABI toolchain
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential fakeroot rsync curl perl xz-utils git libxml2 libtinfo6
+          # jjolano/theos is upstream Theos plus RootHide support, and carries
+          # provision.lock -- the pinned source for the SDKs below. This lane is
+          # rootful, so the RootHide additions are inert here.
+          sudo git clone --recursive --quiet https://github.com/jjolano/theos.git "$THEOS"
+
+          mkdir -p "$RUNNER_TEMP/oldabi/toolchain" "$RUNNER_TEMP/oldabi/sdks" "$THEOS/sdks"
+          curl -fL -o "$RUNNER_TEMP/oldabi/toolchain.tar.xz" \
+            https://github.com/L1ghtmann/llvm-project/releases/download/test-210562a/iOSToolchain-x86_64.tar.xz
+          echo 'a72a7a577e2fbe2838b6b5e9c72034fa7d114af96f0e1d4b016f18730ce4056e  '"$RUNNER_TEMP/oldabi/toolchain.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/oldabi/toolchain.tar.xz" -C "$RUNNER_TEMP/oldabi/toolchain"
+
+          curl -fL -o "$RUNNER_TEMP/oldabi/iPhoneOS13.7.sdk.tar.xz" \
+            https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS13.7.sdk.tar.xz
+          echo '661d1a8c518025f084d8c1e70dd8767581fb5730fb5950378f0915d840a7b5c3  '"$RUNNER_TEMP/oldabi/iPhoneOS13.7.sdk.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/oldabi/iPhoneOS13.7.sdk.tar.xz" -C "$RUNNER_TEMP/oldabi/sdks"
+
+          # AltList/libSandy build against 14.5 (see their Makefiles).
+          sudo -E "$THEOS/bin/provision.sh" --downloads sdks/iPhoneOS14.5.sdk
+
+          # The old-ABI toolchain and 13.7 SDK stay in RUNNER_TEMP rather than
+          # $THEOS: build.sh overrides THEOS_SDKS_PATH with OLDABI_SDKS for this
+          # lane, and the cross ld must stay off the host test path. Their pins
+          # are therefore still inline above rather than read from provision.lock.
+
+          # install-hookkit-theos.sh writes the HookKit framework into $THEOS/lib;
+          # the tree was cloned with sudo, so hand it to the runner user.
+          sudo chown -R "$(id -un)" "$THEOS"
+
+      - name: Build and verify
+        env:
+          OLDABI_TOOLCHAIN: ${{ runner.temp }}/oldabi/toolchain/linux/iphone
+          OLDABI_SDKS: ${{ runner.temp }}/oldabi/sdks
+        run: |
+          # Mach-O tools for HookKit's compat checks — WITHOUT putting the
+          # old-ABI cross-clang on PATH: its host-side tests compile with
+          # plain clang, and the cross toolchain's ld rejects --eh-frame-hdr.
+          mkdir -p "$RUNNER_TEMP/machotools"
+          ln -sf "$OLDABI_TOOLCHAIN/bin/lipo" "$OLDABI_TOOLCHAIN/bin/vtool" \
+              "$OLDABI_TOOLCHAIN/bin/otool" "$OLDABI_TOOLCHAIN/bin/nm" \
+              "$RUNNER_TEMP/machotools/"
+          export PATH="$RUNNER_TEMP/machotools:$PATH"
+          .github/scripts/install-hookkit-theos.sh rootful-legacy
+          .github/scripts/build-deps.sh rootful-legacy
+          ./build.sh rootful-legacy
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: shadow-rootful-legacy
+          path: build/*.deb
+
+  modern:
+    name: ${{ matrix.flavor }}
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        flavor: [rootful-modern, rootless, roothide]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: |
+          brew install dpkg ldid
+          sudo git clone --recursive --quiet https://github.com/jjolano/theos.git "$THEOS"
+          # Xcode 16's iOS SDK dropped private-framework tbds (Preferences et
+          # al); stage the pinned 16.5 SDK so dependency framework links
+          # (AltList -> Preferences) resolve.
+          curl -fL -o "$RUNNER_TEMP/iPhoneOS16.5.sdk.tar.xz" \
+            https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz
+          echo '5e0fd3f01266cce4ce012d4a99b38eb56578fca40d09edc81cd83dee958202fb  '"$RUNNER_TEMP/iPhoneOS16.5.sdk.tar.xz" | shasum -a 256 -c -
+          sudo mkdir -p "$THEOS/sdks"
+          sudo tar -xJf "$RUNNER_TEMP/iPhoneOS16.5.sdk.tar.xz" -C "$THEOS/sdks"
+
+          # The detector-harness runners pin the 14.5 SDK (see their TARGET
+          # lines and the FreeRASP compat-framework symlinks). jjolano/theos
+          # carries it in provision.lock, so fetch it the same way the legacy
+          # job does (URL+sha pinned there, not here).
+          curl -fL -o "$RUNNER_TEMP/iPhoneOS14.5.sdk.tar.xz" \
+            https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS14.5.sdk.tar.xz
+          echo '1c998a5ee7eb8c29e39f0d8c83add9cad1a954342ca0d86204d1b4fe08a921b9  '"$RUNNER_TEMP/iPhoneOS14.5.sdk.tar.xz" | shasum -a 256 -c -
+          sudo tar -xJf "$RUNNER_TEMP/iPhoneOS14.5.sdk.tar.xz" -C "$THEOS/sdks"
+
+          # install-hookkit-theos.sh writes the HookKit framework into $THEOS/lib;
+          # the tree was cloned with sudo, so hand it to the runner user.
+          sudo chown -R "$(id -un)" "$THEOS"
+
+      - name: Build and verify
+        env:
+          # HookKit ABI drift is a review gate, not noise: a HookKit update
+          # that adds/removes/renames ABI surface Shadow binds to must fail
+          # loudly so it gets adapted, not shipped around silently.
+          SHADOW_HOOKKIT_ABI_STRICT: 1
+        run: |
+          .github/scripts/install-hookkit-theos.sh "${{ matrix.flavor }}"
+          .github/scripts/build-deps.sh "${{ matrix.flavor }}"
+          ./build.sh "${{ matrix.flavor }}"
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: shadow-${{ matrix.flavor }}
+          path: build/*.deb

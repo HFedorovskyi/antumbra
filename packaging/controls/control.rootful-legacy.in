@@ -1,0 +1,15 @@
+Package: @PACKAGE@
+Name: Antumbra (Legacy)
+Pre-Depends: dpkg
+Depends: @FIRMWARE@, com.opa334.altlist.legacy, com.opa334.libsandy.legacy, me.jjolano.fmwk.hookkit.legacy (>= 2.5.0)
+Suggests: com.ps.injectionfoundation
+Recommends: mobilesubstrate, preferenceloader
+Provides: me.jjolano.shadow
+Replaces: me.jjolano.shadow, me.jjolano.shadow.beta, me.jjolano.shadow.legacy, me.fedorovskyi.shadow, me.fedorovskyi.shadow.legacy
+Conflicts: me.jjolano.shadow, me.jjolano.shadow.beta, me.jjolano.shadow.legacy, me.fedorovskyi.shadow, me.fedorovskyi.shadow.legacy
+Version: 4.1.0
+Architecture: @PACKAGE_ARCH@
+Description: Jailbreak detection bypass for rootful iOS 9 through 13: Antumbra, a hardened fork of Shadow.
+Maintainer: HRYHORII FEDOROVSKYI <h.fedorovskyi@outlook.com>
+Author: jjolano (upstream core), HRYHORII FEDOROVSKYI (Antumbra fork)
+Section: System

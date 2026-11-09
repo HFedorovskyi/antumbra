@@ -1,0 +1,103 @@
+name: harness
+
+# Public contract checks (no device, no engine build): lane/package
+# contract, static source checks, pure-C checks, and maintainer scripts.
+# The engine-harness jobs (GNUstep/macOS builds) moved to the
+# private repo with the full harness.
+
+on:
+  push:
+  pull_request:
+
+# One run per ref: a new push cancels the superseded in-progress run, and
+# PR branches don't double-run against their push.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lane-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Provision Theos lane matrix
+        run: |
+          # verify-lane-contract.sh reads shared lane fields (TARGET etc.)
+          # from $THEOS/bin/lane.sh (build-support/lanes.sh); only that file
+          # is needed, so sparse-checkout it from jjolano/theos rather than
+          # cloning all of Theos.
+          sudo mkdir -p /opt/theos/bin
+          rm -rf "$RUNNER_TEMP/lane-theos"
+          git clone --quiet --depth 1 --filter=blob:none --sparse \
+            https://github.com/jjolano/theos.git "$RUNNER_TEMP/lane-theos"
+          git -C "$RUNNER_TEMP/lane-theos" sparse-checkout set --skip-checks bin/lane.sh
+          sudo cp "$RUNNER_TEMP/lane-theos/bin/lane.sh" /opt/theos/bin/lane.sh
+          test -f /opt/theos/bin/lane.sh
+
+      - name: Build lane and package metadata contract
+        env:
+          THEOS: /opt/theos
+        run: sh tests/verify-lane-contract.sh
+
+      - name: Binary compatibility checker regression
+        env:
+          THEOS: /opt/theos
+        run: make -C tests verify-binary-compat
+
+      # Static source checks: no device, no toolchain, no docker — pure
+      # grep/awk over the tree. They run here (seconds) instead of after
+      # the ~10-min image build so drift fails fast.
+      - name: Hook→engine matrix drift check
+        run: sh tests/verify-hook-matrix.sh
+
+      - name: Raw syscall metadata check
+        run: sh tests/verify-syscall-meta.sh
+
+      - name: Settings information architecture check
+        run: sh tests/verify-settings-structure.sh
+
+      # Pure-C check for the svc path-munging logic (no Foundation:
+      # compiles and runs on any host with cc).
+      - name: svc path-rewrite check
+        run: make -C tests verify-path-rewrite
+
+      # Host check of the restricted-image span and svc branch-encoding
+      # decisions: extracts the real bodies from the .x sources and drives them
+      # with synthetic Mach-O images.
+      - name: image span + svc branch check
+        run: make -C tests verify-image-span
+
+      # KERN_PROCARGS2 payload model: the kernel's flat string layout, not the
+      # pointer-array shape the filter used to assume (which never matched).
+      - name: procargs payload filter check
+        run: make -C tests verify-procargs-filter
+
+      # Pure-C check for the anti-fishhook journal/repair core.
+      - name: rebind-repair check
+        run: make -C tests verify-rebind-repair
+
+      # Maintainer-script checks (packaging DEBIAN scripts, pure shell).
+      - name: Maintainer scripts check
+        run: sh tests/MaintainerScriptTests.sh
+
+      # Source style is pinned by .clang-format and enforced here, so a stray
+      # formatter run shows up as a failed check instead of a surprise diff.
+      # The version is pinned: clang-format output is not stable across majors,
+      # so an unpinned runner would flag formatting that is correct locally.
+      #
+      # .x hook sources are deliberately EXCLUDED and are never formatted:
+      # they are Logos-preprocessed and clang-format has no Logos support (it
+      # rewrites `%ctor {` to `% ctor {`, which does not compile). See the
+      # scope note in .clang-format.
+      - name: Source format check
+        run: |
+          pip install --quiet clang-format==23.1.1
+          clang-format --version
+          # `git ls-files 'src/**/*.h'` needs a directory component, so a
+          # top-level file like src/common.h would silently go unchecked.
+          # Filter the tree by extension instead. .x is naturally excluded
+          # (it is Logos-preprocessed and must never be formatted).
+          files=$(git ls-files 'src/' | grep -E '\.(m|mm|h|c|inc)$')
+          test -n "$files" || { echo 'no source files matched the format check'; exit 1; }
+          clang-format --style=file --dry-run --Werror $files

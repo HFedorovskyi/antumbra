@@ -1,0 +1,199 @@
+#import <Shadow/Core.h>
+#import <Shadow/JBPath.h>
+
+#import "../common.h"
+
+#import <dirent.h>
+#import <limits.h>
+#import <pthread.h>
+#import <stdlib.h>
+#import <string.h>
+#import <sys/stat.h>
+#import <unistd.h>
+
+#if !defined(SHADOW_ROOTHIDE) && !defined(SHADOW_TEST_HARNESS)
+
+// Runtime jbroot probe with 1s TTL, SHADOW_INTERNAL_SCOPE for device file ops.
+// Probe order: env JBROOT/SHADOW_JBROOT (bootstrap hint only, allowlisted),
+// realpath /var/jb, scan /private/preboot/*/jb, fallback compile-time prefix.
+// Finding 4: env is poisonable via in-app setenv (over-blocking oracle for up
+// to the 1s TTL), so it is honored ONLY pre-first-resolve and ONLY when it
+// points under /private/preboot or /var/jb (/private/var/jb) — never
+// /var/mobile, containers, or app paths. Once a real prefix resolves, env is
+// ignored on re-probes. 1s TTL retained (re-probe cost), now poison-proof.
+
+static NSString *sJBRoot = nil;
+static NSTimeInterval sJBRootExpiry = 0;
+static BOOL sJBRootEverResolved = NO; // set once a non-empty prefix resolves
+// Guards the three statics above (os_unfair_lock is forbidden on the legacy
+// lane). Recursive: the probe runs an internal-scope NSFileManager/stat walk
+// while holding the lock, and an internal hook that resolves a JBPath() on
+// this same thread must re-enter rather than self-deadlock.
+static pthread_mutex_t sJBRootLock = PTHREAD_RECURSIVE_MUTEX_INITIALIZER;
+
+// Allowlist for the env bootstrap hint, tested on the realpath()-resolved
+// string so ".." and symlinks cannot escape it: real jbroots live under
+// /private/preboot/<uuid>/jb (roothide/Dopamine) or /var/jb (legacy
+// rootless). Anything else — /var/mobile, /var/containers, /tmp,
+// app-container paths — is rejected even if it exists.
+static BOOL shdw_env_jbroot_allowed(const char *env) {
+  if (!env || !env[0])
+    return NO;
+  if (strncmp(env, "/private/preboot/", 17) == 0)
+    return YES;
+  if (strcmp(env, "/var/jb") == 0 || strncmp(env, "/var/jb/", 8) == 0)
+    return YES;
+  if (strcmp(env, "/private/var/jb") == 0 ||
+      strncmp(env, "/private/var/jb/", 16) == 0)
+    return YES;
+  return NO;
+}
+
+static NSString *shdw_probe_jbroot(void) {
+  // 1. env JBROOT / SHADOW_JBROOT — bootstrap hint only, allowlisted
+  if (!(sJBRootEverResolved && sJBRoot && [sJBRoot length] > 0)) {
+    const char *env = getenv("JBROOT");
+    if (!env || !env[0])
+      env = getenv("SHADOW_JBROOT");
+    char envResolved[PATH_MAX];
+    BOOL ok = NO;
+    if (env && env[0]) {
+      SHADOW_INTERNAL_SCOPE { ok = realpath(env, envResolved) != NULL; }
+    }
+    if (ok && shdw_env_jbroot_allowed(envResolved))
+      return [NSString stringWithUTF8String:envResolved];
+  }
+
+  // 2. realpath /var/jb
+  char resolved[PATH_MAX];
+  BOOL ok = NO;
+  SHADOW_INTERNAL_SCOPE { ok = realpath("/var/jb", resolved) != NULL; }
+  if (ok) {
+    return [NSString stringWithUTF8String:resolved];
+  }
+
+  SHADOW_INTERNAL_SCOPE {
+    if ([[NSFileManager defaultManager] fileExistsAtPath:@"/var/jb"]) {
+      return @"/var/jb";
+    }
+  }
+
+  // 3. scan /private/preboot/*/jb
+  SHADOW_INTERNAL_SCOPE {
+    NSString *preboot = @"/private/preboot";
+    NSArray *entries =
+        [[NSFileManager defaultManager] contentsOfDirectoryAtPath:preboot
+                                                            error:nil];
+    for (NSString *e in entries) {
+      NSString *candidate = [[preboot stringByAppendingPathComponent:e]
+          stringByAppendingPathComponent:@"jb"];
+      BOOL isDir = NO;
+      if ([[NSFileManager defaultManager] fileExistsAtPath:candidate
+                                               isDirectory:&isDir] &&
+          isDir) {
+        char candResolved[PATH_MAX];
+        if (realpath(SHDWFSPath(candidate), candResolved)) {
+          return [NSString stringWithUTF8String:candResolved];
+        }
+        return candidate;
+      }
+    }
+  }
+
+  // 4. fallback compile-time prefix
+#ifndef THEOS_PACKAGE_INSTALL_PREFIX
+#define THEOS_PACKAGE_INSTALL_PREFIX ""
+#endif
+  NSString *fallback = @THEOS_PACKAGE_INSTALL_PREFIX;
+  if ([fallback length] > 0)
+    return fallback;
+  return @"";
+}
+
+NSString *shdw_jbroot_prefix(void) {
+  // The probe reassigns the strong cache; serialize it so a re-probe on one
+  // thread cannot release the string another thread is returning.
+  pthread_mutex_lock(&sJBRootLock);
+  NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+  if (!(sJBRoot && now < sJBRootExpiry)) {
+    sJBRoot = [shdw_probe_jbroot() copy];
+    sJBRootExpiry =
+        now + 1.0; // 1s TTL retained; env no longer re-poisons (see above)
+    if ([sJBRoot length] > 0)
+      sJBRootEverResolved = YES;
+  }
+  NSString *root = sJBRoot;
+  pthread_mutex_unlock(&sJBRootLock);
+  return root;
+}
+
+NSString *JBPath(NSString *path) {
+  if (!path)
+    return path;
+
+  NSString *root = shdw_jbroot_prefix();
+  BOOL isRootless = [root length] > 0;
+
+  if (isRootless &&
+      ([path hasPrefix:@"/Library/"] || [path hasPrefix:@"/usr/"] ||
+       [path hasPrefix:@"/Applications/"])) {
+    if ([path hasPrefix:root])
+      return path;
+    return [root stringByAppendingString:path];
+  }
+
+  return path;
+}
+
+BOOL JBIsRootless(void) { return [shdw_jbroot_prefix() length] > 0; }
+
+BOOL shdw_is_restricted_root(const char *path) {
+  if (!path || !path[0])
+    return NO;
+  // /private/preboot itself is present on stock iOS. Hide jailbreak
+  // descendants, but let the stock directory reach the ruleset.
+  if (strcmp(path, "/private/preboot") == 0 || strcmp(path, "/preboot") == 0)
+    return NO;
+
+  if (shdw_is_restricted_root_with_prefix(path, NULL))
+    return YES;
+
+  NSString *root = shdw_jbroot_prefix();
+  return shdw_is_restricted_root_with_prefix(
+      path, root.length ? SHDWFSPath(root) : NULL);
+}
+
+BOOL shdw_is_restricted_root_c(const char *path) {
+  return shdw_is_restricted_root(path);
+}
+
+BOOL shdw_path_contains_restricted_root_c(const char *path) {
+  if (!path || !path[0])
+    return NO;
+
+  if (strstr(path, "/var/jb") != NULL)
+    return YES;
+  if (!shdw_is_stock_cryptex_path(path)) {
+    if (strstr(path, "/private/preboot") != NULL)
+      return YES;
+    if (strstr(path, "/preboot") != NULL)
+      return YES;
+  }
+  if (strstr(path, "/cores/") != NULL)
+    return YES;
+
+  NSString *root = shdw_jbroot_prefix();
+  if (root && [root length] > 0) {
+    const char *r = SHDWFSPath(root);
+    if (r && r[0] && strstr(path, r) != NULL)
+      return YES;
+  }
+
+  return NO;
+}
+
+BOOL shdw_is_path_in_restricted_root(NSString *path) {
+  return path ? shdw_is_restricted_root(SHDWFSPath(path)) : NO;
+}
+
+#endif

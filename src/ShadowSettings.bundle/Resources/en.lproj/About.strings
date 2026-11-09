@@ -1,0 +1,34 @@
+"ABOUT_TITLE" = "About";
+"NOTES_RETRY" = "Retry";
+"NOTES_ERROR" = "Could not check for updates. Check your connection and try again.";
+"CHECK_UPDATES" = "Check for Updates";
+"CHECK_AGAIN" = "Check Again";
+"UPDATES_CHECKING" = "Checking for Updates...";
+"UPDATES_DISCLOSURE" = "Contacts GitHub to check for releases.";
+"LAST_CHECKED" = "Last Checked";
+"RELEASE_NOTES" = "Release Notes";
+"VIEW_RELEASE" = "View Release on GitHub";
+"NOTES_NO_RELEASE" = "No matching Antumbra release was found.";
+"NOTES_EMPTY" = "No release notes were provided for this release.";
+"UPDATES_HDR" = "Updates";
+"INSTALLED_VERSION" = "Installed Version";
+"LATEST_VERSION" = "Latest Version";
+"UPDATE_STATUS" = "Status";
+"UP_TO_DATE" = "Up to date";
+"UPDATE_AVAILABLE" = "Update available";
+"CREDITS_HDR" = "Credits";
+"DEVELOPER" = "Developer";
+"CORE_AUTHOR" = "Core Author";
+"VISIT_GITHUB" = "Visit Antumbra on GitHub";
+"VISIT_UPSTREAM" = "Upstream Project by jjolano";
+"LOCALIZATION_HDR" = "Translation";
+
+"RESET_HDR" = "Reset";
+"RESET_SETTINGS" = "Reset Settings";
+"RESET_SETTINGS_DESC" = "Restore all Antumbra settings to their defaults. Per-app settings will be cleared.";
+"RESET_CONFIRM" = "This will restore all Antumbra settings to their defaults. This cannot be undone.";
+"RESET_CANCEL" = "Cancel";
+
+/* your name here! */
+"TRANSLATOR" = "jjolano, HRYHORII FEDOROVSKYI";
+"UNKNOWN" = "Unknown";

@@ -1,0 +1,229 @@
+#import <Shadow/Settings.h>
+
+#import "../common.h"
+#import "SettingsMigration.h"
+#import <Shadow/HookConfiguration.h>
+#import <Shadow/JBPath.h>
+
+static NSString *const kSHDWDetectorRunnerOverridesKey =
+    @"Test_DetectorOverrides";
+
+@implementation ShadowSettings
+@synthesize defaultSettings, userDefaults;
+
+- (instancetype)init {
+  if ((self = [super init])) {
+    // Enabled apps all receive this one built-in profile. Stored hook
+    // values are intentionally ignored — getPreferencesForIdentifier:
+    // copies this dictionary directly, so the profile is never read back
+    // through userDefaults. Deliberately no registerDefaults: registering
+    // the fixed profile would re-materialize every hook key into the
+    // persisted plist as a phantom switch and undo the migration prune.
+    defaultSettings = SHDWDefaultHookSettings();
+
+    userDefaults =
+        [[NSUserDefaults alloc] initWithSuiteName:@SHADOW_PREFS_PLIST];
+    [self migrateLegacyHookSettings];
+  }
+
+  return self;
+}
+
+- (void)migrateLegacyHookSettings {
+  // Read and write the same store. initWithSuiteName: persists through
+  // cfprefsd (on rootless, to /var/jb/var/mobile/...), whereas the literal
+  // SHADOW_PREFS_PLIST path names a different, stale /var/mobile/... file; a
+  // file-sourced snapshot diffs against the wrong store and prunes nothing.
+  // persistentDomainForName: returns exactly this suite's stored keys (no
+  // global/registration domains), so the rebuild below can never drop a
+  // system default.
+  NSDictionary *root =
+      [userDefaults persistentDomainForName:@SHADOW_PREFS_PLIST];
+  if (![root isKindOfClass:[NSDictionary class]]) {
+    return;
+  }
+
+  NSDictionary *migratedRoot = SHDWMigratedHookSettings(root);
+  BOOL firstSingleToggleMigration =
+      ![root[SHDWSingleToggleMigrationID] boolValue];
+  BOOL legacyGlobalEnabled = [root[SHDWGlobalEnabledID] boolValue];
+
+  // Rebuild the migrated domain and write it back wholesale with
+  // setPersistentDomain:forName: — a single atomic replace, rather than
+  // per-key setObject:/removeObjectForKey: calls whose removals are the
+  // unreliable half through the cfprefsd bridge. The result is exactly the
+  // pruned shape.
+  NSMutableDictionary *domain = [NSMutableDictionary dictionary];
+  for (NSString *key in migratedRoot) {
+    id value = migratedRoot[key];
+    if ([value isKindOfClass:[NSDictionary class]]) {
+      NSMutableDictionary *migratedApp =
+          [SHDWMigratedHookSettings(value) mutableCopy];
+      if (firstSingleToggleMigration && legacyGlobalEnabled &&
+          ![value[SHDWAppDisabledID] boolValue] &&
+          ![value[SHDWAppEnabledID] boolValue]) {
+        migratedApp[SHDWAppEnabledID] = @YES;
+      }
+      domain[key] = [migratedApp copy];
+    } else {
+      domain[key] = value;
+    }
+  }
+  if (firstSingleToggleMigration) {
+    domain[SHDWSingleToggleMigrationID] = @YES;
+  }
+
+  if (![domain isEqualToDictionary:root]) {
+    [userDefaults setPersistentDomain:domain forName:@SHADOW_PREFS_PLIST];
+    [userDefaults synchronize];
+  }
+}
+
++ (instancetype)sharedInstance {
+  static ShadowSettings *sharedInstance = nil;
+  static dispatch_once_t onceToken = 0;
+
+  dispatch_once(&onceToken, ^{
+    sharedInstance = [self new];
+  });
+
+  return sharedInstance;
+}
+
+- (void)reset {
+  // Wipe the whole persistent domain in one atomic write: global toggle,
+  // aggressive mode, and every per-app override drop back to defaults. Same
+  // suite name as init so cfprefsd clears the store the runtime reads.
+  [userDefaults setPersistentDomain:@{} forName:@SHADOW_PREFS_PLIST];
+  [userDefaults synchronize];
+}
+
+- (NSDictionary<NSString *, id> *)getPreferencesForIdentifier:
+    (NSString *)bundleIdentifier {
+  if (!userDefaults) {
+    return nil;
+  }
+
+  NSMutableDictionary *result = [defaultSettings mutableCopy];
+  NSDictionary *app_settings =
+      bundleIdentifier ? [userDefaults objectForKey:bundleIdentifier] : nil;
+  if (![app_settings isKindOfClass:[NSDictionary class]]) {
+    app_settings = nil;
+  }
+  NSDictionary *filePreferences = nil;
+  NSDictionary *fileAppSettings = nil;
+  // Sandboxed cfprefsd can omit another app's dictionary despite libSandy's
+  // file grant.
+  if (bundleIdentifier) {
+    id fileRoot =
+        [NSDictionary dictionaryWithContentsOfFile:@SHADOW_PREFS_PLIST];
+    filePreferences =
+        [fileRoot isKindOfClass:[NSDictionary class]] ? fileRoot : nil;
+    id fileSettings = filePreferences[bundleIdentifier];
+    fileAppSettings = [fileSettings isKindOfClass:[NSDictionary class]]
+                          ? SHDWMigratedHookSettings(fileSettings)
+                          : nil;
+  }
+  if (!app_settings) {
+    app_settings = fileAppSettings;
+  }
+
+  // Test profiles are file-authoritative so cfprefsd cannot retain an old
+  // arm while the device driver swaps the backing plist.
+  if ([bundleIdentifier isEqualToString:@"me.jjolano.shadow.harness"] &&
+      filePreferences) {
+    app_settings = fileAppSettings;
+  }
+
+  BOOL enabled = SHDWApplicationEnabled(
+      app_settings,
+      SHDWGlobalEnabledValue([userDefaults objectForKey:SHDWGlobalEnabledID]),
+      [userDefaults boolForKey:SHDWSingleToggleMigrationID],
+      [bundleIdentifier isEqualToString:@"me.jjolano.shadow.harness"] ||
+          bundleIdentifier.length == 0);
+  if (enabled &&
+      SHDWApplicationExcluded(
+          app_settings, [userDefaults objectForKey:SHDWGlobalDisabledAppsID],
+          bundleIdentifier)) {
+    enabled = NO;
+  }
+  result[SHDWAppEnabledID] = @(enabled);
+
+  // Aggressive detector neutralization: per-app override, else the global
+  // default. Written into the returned profile so the coordinator/adapters
+  // can gate their disable-style paths on it. Detector runners resolve it the
+  // same way (their app_settings are file-authoritative), so the harness can
+  // exercise natural vs aggressive by writing the key into a runner's profile
+  // or the global scalar; it defaults to NO (natural) like every other app.
+  result[SHDWDetectorAggressiveID] = @(SHDWDetectorAggressiveEnabled(
+      app_settings, [userDefaults boolForKey:SHDWDetectorAggressiveID]));
+
+  // Deep tier-2 hiding follows the same per-app-then-global resolution.
+  id deepTier2 = app_settings[SHDWDeepTier2ID];
+  result[SHDWDeepTier2ID] =
+      @(deepTier2 ? [deepTier2 boolValue]
+                  : [userDefaults boolForKey:SHDWDeepTier2ID]);
+
+  // Pseudo-sandbox mode: a global scalar resolved from userDefaults rather
+  // than the fixed profile's constant. The profile exists to force full
+  // capability, so taking the mode from it would leave the engine permanently
+  // off. Absent (the normal case) reads 0 = off, which keeps every belt
+  // verdict byte-identical to a build without the mode.
+  result[SHDWUniversalPseudoSandboxModeID] =
+      @([userDefaults integerForKey:SHDWUniversalPseudoSandboxModeID]);
+
+  if (enabled) {
+    // Debug bisection: carry the force-skip list into the profile so the
+    // planner can drop individual lanes without a rebuild per step.
+    NSString *debugDisabled =
+        [userDefaults stringForKey:SHDWDebugDisabledPluginsID];
+    if ([debugDisabled isKindOfClass:[NSString class]]) {
+      result[SHDWDebugDisabledPluginsID] = debugDisabled;
+    }
+    id noInfos = [userDefaults objectForKey:SHDWDebugDyldNoInfosID];
+    if ([noInfos isKindOfClass:[NSNumber class]]) {
+      result[SHDWDebugDyldNoInfosID] = noInfos;
+    }
+    id noSpi = [userDefaults objectForKey:SHDWDebugDyldNoSpiInlineID];
+    if ([noSpi isKindOfClass:[NSNumber class]]) {
+      result[SHDWDebugDyldNoSpiInlineID] = noSpi;
+    }
+    NSString *skipRebinds =
+        [userDefaults stringForKey:SHDWDebugDyldSkipRebindsID];
+    if ([skipRebinds isKindOfClass:[NSString class]]) {
+      result[SHDWDebugDyldSkipRebindsID] = skipRebinds;
+    }
+
+    // Not user configuration: the device evidence driver can disable one
+    // adapter for the harness's embedded detectors without weakening
+    // normal app profiles.
+    NSDictionary *overrides =
+        [bundleIdentifier isEqualToString:@"me.jjolano.shadow.harness"] &&
+                [app_settings[kSHDWDetectorRunnerOverridesKey]
+                    isKindOfClass:[NSDictionary class]]
+            ? app_settings[kSHDWDetectorRunnerOverridesKey]
+            : nil;
+    for (NSString *key in @[
+           SHDWAdapterDeviceCheckID, SHDWAdapterFreeRASPID,
+           SHDWAdapterDeviceSecurityKitID, SHDWAdapterIOSSecuritySuiteID
+         ]) {
+      id value = overrides[key];
+      if ([value isKindOfClass:[NSNumber class]]) {
+        result[key] = @([value boolValue]);
+      }
+    }
+
+    // Harness normally records a universal baseline before SDK-specific
+    // hooks load. Its explicit test mode may opt into a fully prearmed
+    // detector run without changing any other app's behavior.
+    if ([bundleIdentifier isEqualToString:@"me.jjolano.shadow.harness"]) {
+      id baseline = [app_settings objectForKey:SHDWUniversalHarnessBaselineID];
+      if (baseline != nil) {
+        result[SHDWUniversalHarnessBaselineID] = baseline;
+      }
+    }
+  }
+
+  return [result copy];
+}
+@end

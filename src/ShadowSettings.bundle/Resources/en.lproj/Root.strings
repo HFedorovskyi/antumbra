@@ -1,0 +1,26 @@
+"PANEL_TITLE" = "Antumbra";
+
+"GLOBAL_SETTINGS" = "Global Settings";
+
+"ALWAYS_ON" = "Enable in All Apps";
+"ALWAYS_ON_DESC" = "Enable Antumbra in all apps by default. Per-app settings override this.";
+
+"PSEUDO_SANDBOX_SETTINGS" = "Sandbox Diagnostics";
+"PSEUDO_SANDBOX" = "Sandbox Audit";
+"PSEUDO_SANDBOX_DESC" = "Records the paths a sandboxed app could not reach, without changing any result. Diagnostic only: it has no visible effect, and the recorded paths stay in memory. The mode that would actually deny those paths is not offered, because it refuses paths apps rely on, and every extra rule makes Antumbra behave less like a stock device, which is itself a tell.";
+
+"AGGRESSIVE_SETTINGS" = "Detector Neutralization";
+"AGGRESSIVE" = "Aggressive Mode";
+"AGGRESSIVE_DESC" = "By default Antumbra presents a stock-looking environment (natural bypass). Aggressive mode additionally forces known detectors' checks to report clean. This is less subtle and can itself be a tell, so leave it off unless a specific detector needs it. Per-app settings override this.";
+
+"ROOT_APP_SETTINGS" = "Application Settings";
+"ROOT_APP_SETTINGS_DESC" = "Choose the applications where Antumbra should run.";
+
+"APPLICATIONS" = "Applications";
+
+"LANGUAGE_HDR" = "Language";
+"LANGUAGE_DESC" = "Language of this pane. English is the default; the system locale does not affect it.";
+"LANGUAGE_ENGLISH" = "English";
+"LANGUAGE_RUSSIAN" = "Русский";
+
+"ROOT_ABOUT" = "About";

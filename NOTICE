@@ -1,0 +1,29 @@
+Antumbra (fork of Shadow)
+=========================
+
+This repository is a modified fork of Shadow, a modern jailbreak detection
+bypass by jjolano <https://github.com/jjolano/shadow>.
+
+Upstream copyright: Copyright (c) 2023, jjolano.
+Upstream license: BSD 3-Clause (see LICENSE in this repository).
+
+The fork ships under its own product name, Antumbra, and its own package
+identifier (me.fedorovskyi.antumbra), and adds hardening for iOS 15-18
+jailbreak environments: additional hook lanes, per-app opt-out tooling,
+pane-language selection and packaging for rootless Dopamine. Modifications
+since the fork point are Copyright (c) 2026, HRYHORII FEDOROVSKYI, and are
+distributed under the same BSD 3-Clause license.
+
+This fork is not affiliated with, sponsored by, or endorsed by the original
+author. The core's internal identifiers (Shadow.framework, ShadowCore.dylib,
+Shadow.dylib, ShadowSettings.bundle and the me.jjolano.shadow prefs domain)
+are retained only to stay compatible with existing Shadow installations and
+verified injection lanes; they do not imply endorsement.
+
+The distributed Debian package declares Provides/Replaces/Conflicts against
+the upstream identifiers so it can replace, but not silently impersonate, the
+original package. The About page inside the settings pane credits the core
+author separately from the fork maintainer.
+
+The upstream README cites the Copyright Act, RSC 1985, c C-42, s 41.12. That
+note is upstream's own and is not a license grant from this fork.

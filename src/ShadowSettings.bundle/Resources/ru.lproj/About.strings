@@ -1,0 +1,34 @@
+"ABOUT_TITLE" = "О программе";
+"NOTES_RETRY" = "Повторить";
+"NOTES_ERROR" = "Не удалось проверить обновления. Проверьте соединение и повторите.";
+"CHECK_UPDATES" = "Проверить обновления";
+"CHECK_AGAIN" = "Проверить снова";
+"UPDATES_CHECKING" = "Проверка обновлений…";
+"UPDATES_DISCLOSURE" = "Обращается к GitHub для проверки релизов.";
+"LAST_CHECKED" = "Последняя проверка";
+"RELEASE_NOTES" = "Заметки о выпуске";
+"VIEW_RELEASE" = "Открыть релиз на GitHub";
+"NOTES_NO_RELEASE" = "Подходящий релиз Antumbra не найден.";
+"NOTES_EMPTY" = "Для этого релиза заметки не указаны.";
+"UPDATES_HDR" = "Обновления";
+"INSTALLED_VERSION" = "Установленная версия";
+"LATEST_VERSION" = "Последняя версия";
+"UPDATE_STATUS" = "Состояние";
+"UP_TO_DATE" = "Актуально";
+"UPDATE_AVAILABLE" = "Доступно обновление";
+"CREDITS_HDR" = "Благодарности";
+"DEVELOPER" = "Разработчик";
+"CORE_AUTHOR" = "Разработчик ядра";
+"VISIT_GITHUB" = "Antumbra на GitHub";
+"VISIT_UPSTREAM" = "Оригинальный проект jjolano";
+"LOCALIZATION_HDR" = "Перевод";
+
+"RESET_HDR" = "Сброс";
+"RESET_SETTINGS" = "Сбросить настройки";
+"RESET_SETTINGS_DESC" = "Вернуть все настройки Antumbra к значениям по умолчанию. Настройки приложений будут очищены.";
+"RESET_CONFIRM" = "Все настройки Antumbra вернутся к значениям по умолчанию. Отменить это нельзя.";
+"RESET_CANCEL" = "Отмена";
+
+/* your name here! */
+"TRANSLATOR" = "jjolano, HRYHORII FEDOROVSKYI";
+"UNKNOWN" = "Неизвестно";

@@ -1,0 +1,646 @@
+#import "RulesetCompiler.h"
+#import "Ruleset.h"
+#import "RulesetPrivate.h"
+
+// Candidate 5: RulesetCompiler — parse + validate + compile + persist. The
+// matching side stays in Ruleset.m; everything else (including the per-URL
+// last-known-good and the compiled-cache read/write, v2 format untouched)
+// lives here. Framework-internal: not exported, not in exported_symbols.txt.
+
+// Bumped to 5: v5 structure is a {dirs, paths} pair of sorted flat arrays
+// (was dict-of-dir→children; v4's single flat array broke shallow structures
+// where a path's ancestor is a non-key child).
+static const NSInteger kShadowRulesetCacheVersion = 5;
+
+// Cache stamp for one ruleset plist: NSFileModificationDate in ns, in ONE
+// convention shared by the reader, the writer and the compile call site
+// (timeIntervalSince1970 whenever the attribute is present — always on iOS;
+// GNUstep hosts may omit it and fall back to reference-date ns). Inlining the
+// epoch choice per site is how a reader/writer mismatch goes unnoticed: the
+// writer then stamps a value the reader can never match, and the compiled
+// cache silently stops being written or read.
+static NSNumber *shdw_compiledCacheStamp(NSDictionary *plistAttrs) {
+  NSDate *modified = [plistAttrs fileModificationDate];
+
+  if ([plistAttrs objectForKey:NSFileModificationDate]) {
+    return @([modified timeIntervalSince1970] * 1e9);
+  }
+
+  return @([modified timeIntervalSinceReferenceDate] * 1e9);
+}
+
+@implementation ShadowRulesetCompiler
+
+// Full load path for one ruleset URL: compiled cache first (while the
+// plist's mtime+size are unchanged), then parse + compile, then persist.
+// Per-URL last-known-good: if a later reload fails, keep serving the
+// previously parsed ruleset instead of dropping it. Verbatim move of the old
+// +[RulesetEngine rulesetWithURL:]. Entries are keyed by path and validated
+// against the plist's mtime, so a changed file's stale entry is unreachable
+// (and replaced on the next successful compile), and entries whose file no
+// longer exists are evicted on the next compile — the dict stays bounded to
+// live ruleset files instead of retaining every URL ever loaded.
++ (RulesetEngine *)compileRulesetAtURL:(NSURL *)url {
+  @synchronized([RulesetEngine class]) {
+    static NSMutableDictionary *lastKnownGood = nil;
+
+    if (!lastKnownGood) {
+      lastKnownGood = [NSMutableDictionary new];
+    }
+
+    NSString *plistPath = [url path];
+    NSDictionary *plistAttrs =
+        [[NSFileManager defaultManager] attributesOfItemAtPath:plistPath
+                                                         error:nil];
+    double mtime = plistAttrs ? [[plistAttrs fileModificationDate]
+                                    timeIntervalSinceReferenceDate]
+                              : 0.0;
+
+    // Evict last-known-good entries whose file no longer exists; a
+    // changed file's entry is keyed out by its stale mtime and replaced
+    // below on the next successful compile.
+    for (NSString *key in [lastKnownGood allKeys]) {
+      if (![[NSFileManager defaultManager] fileExistsAtPath:key]) {
+        [lastKnownGood removeObjectForKey:key];
+      }
+    }
+
+    NSDictionary *ruleset_dict = nil;
+
+    // Try the compiled cache first: while the plist's mtime+size are
+    // unchanged, the archived lookup tables are exactly what _compile
+    // would build, so skip the plist parse and recompile entirely.
+    RulesetEngine *fromCache = [self _rulesetFromCompiledCacheForURL:url];
+
+    if (fromCache) {
+      [lastKnownGood setObject:@[ @(mtime), fromCache ] forKey:plistPath];
+      return fromCache;
+    }
+
+    @try {
+      ruleset_dict = [NSDictionary dictionaryWithContentsOfURL:url];
+    } @catch (NSException *exception) {
+      NSLog(@"[Ruleset] exception parsing %@: %@", url, exception);
+    }
+
+    if (ruleset_dict) {
+      RulesetEngine *ruleset = [RulesetEngine new];
+      ruleset.payloadDictionary = ruleset_dict;
+
+      @try {
+        [self _compileRuleset:ruleset];
+      } @catch (NSException *exception) {
+        NSLog(@"[Ruleset] exception compiling %@: %@", url, exception);
+        ruleset = nil;
+      }
+
+      if (ruleset) {
+        // The cache is keyed on the plist mtime the PARSE saw (not a re-stat),
+        // in the one convention shdw_compiledCacheStamp defines.
+        [self
+            _writeCompiledCacheForRuleset:ruleset
+                                      url:url
+                                  nsMtime:shdw_compiledCacheStamp(plistAttrs)];
+        [lastKnownGood setObject:@[ @(mtime), ruleset ] forKey:plistPath];
+        return ruleset;
+      }
+    }
+
+    NSArray *entry = [lastKnownGood objectForKey:plistPath];
+
+    if (entry && [[entry objectAtIndex:0] doubleValue] == mtime) {
+      NSLog(@"[Ruleset] failed to load %@; serving last-known-good ruleset",
+            url);
+      return [entry objectAtIndex:1];
+    }
+  }
+
+  return nil;
+}
+
+// NSNull is stored for nil fields so every cache entry has every key; this
+// unwraps it back to nil after validation.
+static id shdwCacheUnwrapNil(id value) {
+  return [value isKindOfClass:[NSNull class]] ? nil : value;
+}
+
+// Loads and validates the compiled cache for a ruleset URL. Returns nil on a
+// miss, an mtime/size mismatch, an unreadable/corrupt archive, or a
+// type-invalid payload — callers then fall back to parse + compile. Verbatim
+// move of the old +[RulesetEngine _rulesetFromCompiledCacheForURL:].
++ (RulesetEngine *)_rulesetFromCompiledCacheForURL:(NSURL *)url {
+  NSString *plistPath = [url path];
+  NSDictionary *plistAttrs =
+      [[NSFileManager defaultManager] attributesOfItemAtPath:plistPath
+                                                       error:nil];
+
+  if (!plistAttrs) {
+    return nil;
+  }
+
+  NSDictionary *cached = nil;
+
+  // The modern NSKeyedUnarchiver entry points (initForReadingFromData:…,
+  // unarchivedObjectOfClass:…) require iOS 11; the deployment target (Makefile
+  // TARGET) is iOS 12, and the modern iOS 11 entry points are out of scope, so
+  // the legacy API is the correct one here — deprecation suppression is
+  // deliberate, not debt.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+  @try {
+    cached = [NSKeyedUnarchiver
+        unarchiveObjectWithFile:
+            [plistPath stringByAppendingString:kShadowRulesetCacheSuffix]];
+  } @catch (NSException *exception) {
+    // Corrupt archive: fall back to compiling from the plist.
+    cached = nil;
+  }
+#pragma clang diagnostic pop
+
+  // v3: ns mtime only (no size); NSFileModificationDate resolution is ns on
+  // iOS. Older caches lack ns key → miss (rebuilt on next compile).
+  NSNumber *nsMtime = shdw_compiledCacheStamp(plistAttrs);
+  if (![cached isKindOfClass:[NSDictionary class]] ||
+      ![[cached objectForKey:@"version"]
+          isEqualToNumber:@(kShadowRulesetCacheVersion)] ||
+      ![[cached objectForKey:@"nsMtime"] isEqualToNumber:nsMtime]) {
+    // prune stale cache file
+    @try {
+      [[NSFileManager defaultManager]
+          removeItemAtPath:
+              [plistPath stringByAppendingString:kShadowRulesetCacheSuffix]
+                     error:nil];
+    } @catch (NSException *e) {
+    }
+    return nil;
+  }
+
+  RulesetEngine *ruleset = [RulesetEngine new];
+
+  if (![self _restoreFromCache:cached intoRuleset:ruleset]) {
+    return nil;
+  }
+
+  return ruleset;
+}
+
+// Type-validates and installs the cached compiled state. Returns NO on any
+// type mismatch so the caller falls back to _compile; the cache file is
+// Shadow's own artifact but a corrupt or stale-format file must never crash
+// a lookup. Verbatim move of the old -[RulesetEngine _restoreFromCache:].
++ (BOOL)_restoreFromCache:(NSDictionary *)cached
+              intoRuleset:(RulesetEngine *)ruleset {
+  if (![[cached objectForKey:@"payload"] isKindOfClass:[NSDictionary class]]) {
+    return NO;
+  }
+
+  for (NSString *key in
+       @[ @"schemes", @"whitelist", @"blacklist", @"bundleids" ]) {
+    id value = [cached objectForKey:key];
+
+    if (![value isKindOfClass:[NSSet class]]) {
+      if ([value isKindOfClass:[NSNull class]]) {
+        continue;
+      }
+
+      return NO;
+    }
+
+    for (id member in value) {
+      if (![member isKindOfClass:[NSString class]]) {
+        return NO;
+      }
+    }
+  }
+
+  for (NSString *key in @[ @"whitelist_prefixes", @"blacklist_prefixes" ]) {
+    id value = [cached objectForKey:key];
+
+    if (![value isKindOfClass:[NSDictionary class]]) {
+      if ([value isKindOfClass:[NSNull class]]) {
+        continue;
+      }
+
+      return NO;
+    }
+
+    for (id dictKey in value) {
+      if (![dictKey isKindOfClass:[NSString class]]) {
+        return NO;
+      }
+
+      id set = [value objectForKey:dictKey];
+
+      if (![set isKindOfClass:[NSSet class]]) {
+        return NO;
+      }
+
+      for (id member in set) {
+        if (![member isKindOfClass:[NSString class]]) {
+          return NO;
+        }
+      }
+    }
+  }
+
+  // structure is now a {dirs, paths} pair of sorted flat string arrays (v5).
+  {
+    id value = [cached objectForKey:@"structure"];
+
+    if (![value isKindOfClass:[NSNull class]]) {
+      if (![value isKindOfClass:[NSDictionary class]]) {
+        return NO;
+      }
+
+      for (NSString *key in @[ @"dirs", @"paths" ]) {
+        id arr = [value objectForKey:key];
+
+        if (![arr isKindOfClass:[NSArray class]]) {
+          return NO;
+        }
+
+        for (id member in (NSArray *)arr) {
+          if (![member isKindOfClass:[NSString class]]) {
+            return NO;
+          }
+        }
+      }
+    }
+  }
+
+  for (NSString *key in @[ @"pred_whitelist", @"pred_blacklist" ]) {
+    id value = [cached objectForKey:key];
+
+    if (![value isKindOfClass:[NSPredicate class]] &&
+        ![value isKindOfClass:[NSNull class]]) {
+      return NO;
+    }
+  }
+
+  if (![[cached objectForKey:@"whitelist_match_all"]
+          isKindOfClass:[NSNumber class]] ||
+      ![[cached objectForKey:@"blacklist_match_all"]
+          isKindOfClass:[NSNumber class]]) {
+    return NO;
+  }
+
+  ruleset.payloadDictionary = [cached objectForKey:@"payload"];
+  ruleset->set_urlschemes =
+      shdwCacheUnwrapNil([cached objectForKey:@"schemes"]);
+  ruleset->set_whitelist =
+      shdwCacheUnwrapNil([cached objectForKey:@"whitelist"]);
+  ruleset->set_blacklist =
+      shdwCacheUnwrapNil([cached objectForKey:@"blacklist"]);
+  ruleset->set_bundleids =
+      shdwCacheUnwrapNil([cached objectForKey:@"bundleids"]);
+  ruleset->dict_whitelist =
+      shdwCacheUnwrapNil([cached objectForKey:@"whitelist_prefixes"]);
+  ruleset->dict_blacklist =
+      shdwCacheUnwrapNil([cached objectForKey:@"blacklist_prefixes"]);
+  {
+    NSDictionary *structure =
+        shdwCacheUnwrapNil([cached objectForKey:@"structure"]);
+    ruleset->array_structure_dirs = [structure objectForKey:@"dirs"];
+    ruleset->array_structure_paths = [structure objectForKey:@"paths"];
+  }
+  ruleset->pred_whitelist =
+      shdwCacheUnwrapNil([cached objectForKey:@"pred_whitelist"]);
+  ruleset->pred_blacklist =
+      shdwCacheUnwrapNil([cached objectForKey:@"pred_blacklist"]);
+  ruleset->whitelist_match_all =
+      [[cached objectForKey:@"whitelist_match_all"] boolValue];
+  ruleset->blacklist_match_all =
+      [[cached objectForKey:@"blacklist_match_all"] boolValue];
+  return YES;
+}
+
+// Best-effort archive of the compiled state next to the plist, keyed by the
+// plist's mtime and size. Never fails the compile path: unreadable or
+// read-only rulesets dirs just skip caching. Verbatim move of the old
+// +[RulesetEngine _writeCompiledCacheForRuleset:url:]; v2 format, no v3
+// writer yet.
++ (void)_writeCompiledCacheForRuleset:(RulesetEngine *)ruleset
+                                  url:(NSURL *)url
+                              nsMtime:(NSNumber *)nsMtime {
+  // After _compile the full payload is dead weight: the compiled lookup
+  // tables are the working set (their strings are shared with the payload,
+  // so nothing is lost by releasing the container shells), and the only
+  // remaining consumer is the store's load log, which reads the small
+  // RulesetInfo sub-dict. Archive that reduced payload — the old cache
+  // embedded the whole FileSystemStructure twice (raw + compiled) — and
+  // shrink the live ruleset's retained payload to match, releasing the
+  // MB-scale container shells of a generated SystemRules for the process
+  // lifetime. A ruleset without RulesetInfo keeps an empty payload, which
+  // The store logs identically (its objectForKey: then returns nil, the same
+  // as before).
+  NSDictionary *info = [ruleset.payloadDictionary objectForKey:@"RulesetInfo"];
+  NSDictionary *reducedPayload = info ? @{@"RulesetInfo" : info} : @{};
+  ruleset.payloadDictionary = reducedPayload;
+
+  NSString *plistPath = [url path];
+  NSDictionary *plistAttrs =
+      [[NSFileManager defaultManager] attributesOfItemAtPath:plistPath
+                                                       error:nil];
+
+  if (!plistAttrs) {
+    return;
+  }
+
+  // Re-stat ONLY to confirm the file did not move while it was parsed. The
+  // stamp itself is the mtime the parse ran against: stamping a re-stat let a
+  // plist replaced mid-compile be archived from the OLD bytes under the NEW
+  // mtime, and the reader's only freshness test is this number — so every
+  // later loader (any process, any restart) accepted a compiled cache missing
+  // whatever the newer file added.
+  NSNumber *currentMtime = shdw_compiledCacheStamp(plistAttrs);
+
+  if (![currentMtime isEqualToNumber:nsMtime]) {
+    return; // moved mid-compile: no cache entry rather than a poisoned one
+  }
+
+  NSDictionary *cached = @{
+    @"version" : @(kShadowRulesetCacheVersion),
+    @"nsMtime" : nsMtime,
+    @"payload" : reducedPayload,
+    @"schemes" : ruleset->set_urlschemes ?: [NSNull null],
+    @"whitelist" : ruleset->set_whitelist ?: [NSNull null],
+    @"blacklist" : ruleset->set_blacklist ?: [NSNull null],
+    @"bundleids" : ruleset->set_bundleids ?: [NSNull null],
+    @"whitelist_prefixes" : ruleset->dict_whitelist ?: [NSNull null],
+    @"blacklist_prefixes" : ruleset->dict_blacklist ?: [NSNull null],
+    @"structure" :
+            (ruleset->array_structure_dirs || ruleset->array_structure_paths)
+        ? @{
+            @"dirs" : ruleset->array_structure_dirs ?: [NSNull null],
+            @"paths" : ruleset->array_structure_paths ?: [NSNull null]
+          }
+        : [NSNull null],
+    @"pred_whitelist" : ruleset->pred_whitelist ?: [NSNull null],
+    @"pred_blacklist" : ruleset->pred_blacklist ?: [NSNull null],
+    @"whitelist_match_all" : @(ruleset->whitelist_match_all),
+    @"blacklist_match_all" : @(ruleset->blacklist_match_all)
+  };
+
+  // Legacy archiver: iOS 11 entry points are out of scope and the
+  // deployment target is iOS 12 (Makefile TARGET) — see the unarchive side
+  // above.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+  @try {
+    NSData *data = [NSKeyedArchiver archivedDataWithRootObject:cached];
+
+    if (data) {
+      [data writeToFile:[plistPath
+                            stringByAppendingString:kShadowRulesetCacheSuffix]
+             atomically:YES];
+    }
+  } @catch (NSException *exception) {
+    // Best-effort only.
+  }
+#pragma clang diagnostic pop
+}
+
+// Filters a payload value to an NSArray of NSStrings; non-array values and
+// non-string entries are logged and skipped (malformed rulesets never crash).
+// Verbatim move of the old -[RulesetEngine _validatedStringArray:forKey:].
++ (NSArray<NSString *> *)validatedStringArray:(id)value forKey:(NSString *)key {
+  if (![value isKindOfClass:[NSArray class]]) {
+    if (value) {
+      NSLog(@"[Ruleset] invalid %@: expected array, got %@; ignoring", key,
+            [value class]);
+    }
+
+    return nil;
+  }
+
+  NSMutableArray *result = [NSMutableArray new];
+
+  for (id entry in value) {
+    if ([entry isKindOfClass:[NSString class]]) {
+      [result addObject:entry];
+    } else {
+      NSLog(@"[Ruleset] invalid %@ entry (got %@); skipping", key,
+            [entry class]);
+    }
+  }
+
+  return result;
+}
+
+// Builds a lowercase immutable set from a string array (load-time normalization
+// shared by scheme + bundle-ID blacklists).
++ (NSSet *)lowercaseSetFromArray:(NSArray<NSString *> *)strings {
+  NSMutableSet *lower = [NSMutableSet setWithCapacity:[strings count]];
+
+  for (NSString *s in strings) {
+    [lower addObject:[s lowercaseString]];
+  }
+
+  return [lower copy];
+}
+
+// Parses predicate format strings and ORs them together; malformed entries are
+// logged and skipped. Returns nil if none parse (same as leaving the slot
+// unset).
++ (NSPredicate *)orPredicateFromStrings:(NSArray<NSString *> *)strings {
+  NSMutableArray<NSPredicate *> *preds = [NSMutableArray new];
+
+  for (NSString *pred_str in strings) {
+    @try {
+      [preds addObject:[NSPredicate predicateWithFormat:pred_str]];
+    } @catch (NSException *exception) {
+      NSLog(@"[Ruleset] invalid predicate '%@': %@; skipping", pred_str,
+            exception);
+    }
+  }
+
+  return [preds count] > 0
+             ? [NSCompoundPredicate orPredicateWithSubpredicates:preds]
+             : nil;
+}
+
+// Filters FileSystemStructure to a {dirs, paths} pair of sorted flat string
+// arrays; anything else is logged and skipped (malformed rulesets never
+// crash). dirs = the structure keys, paths = keys + children. Old dict
+// payloads are ignored: isPathCompliant then returns YES (hardening off until
+// the ruleset is regenerated).
++ (NSDictionary *)validatedStructure:(id)value {
+  if (![value isKindOfClass:[NSDictionary class]]) {
+    if (value) {
+      NSLog(@"[Ruleset] invalid FileSystemStructure: expected {dirs, paths} "
+            @"dictionary, got %@; ignoring",
+            [value class]);
+    }
+
+    return nil;
+  }
+
+  NSMutableDictionary *result = [NSMutableDictionary new];
+
+  for (NSString *key in @[ @"dirs", @"paths" ]) {
+    id arr = [value objectForKey:key];
+
+    if (![arr isKindOfClass:[NSArray class]]) {
+      NSLog(@"[Ruleset] invalid FileSystemStructure %@ (got %@); ignoring", key,
+            [arr class]);
+      return nil;
+    }
+
+    NSMutableArray *strings =
+        [NSMutableArray arrayWithCapacity:[(NSArray *)arr count]];
+
+    for (id entry in (NSArray *)arr) {
+      if ([entry isKindOfClass:[NSString class]]) {
+        [strings addObject:entry];
+      } else {
+        NSLog(@"[Ruleset] invalid FileSystemStructure %@ entry (got %@); "
+              @"skipping",
+              key, [entry class]);
+      }
+    }
+
+    // Defensive sort for hand-written fixtures (already-sorted is a no-op).
+    strings =
+        [[strings sortedArrayUsingSelector:@selector(compare:)] mutableCopy];
+
+    [result setObject:[strings copy] forKey:key];
+  }
+
+  return result;
+}
+
+// Compiles a ruleset's payload into its lookup tables. Verbatim move of the
+// old -[RulesetEngine _compile].
++ (void)_compileRuleset:(RulesetEngine *)ruleset {
+  NSDictionary *payload = ruleset.payloadDictionary;
+
+  // Type-validate entries before compiling; malformed values are logged and
+  // skipped, never fatal.
+  NSArray *urlschemes =
+      [self validatedStringArray:[payload objectForKey:@"BlacklistURLSchemes"]
+                          forKey:@"BlacklistURLSchemes"];
+
+  if (urlschemes) {
+    // C0-3: normalize schemes to lowercase at load (match time also
+    // lowercases the query — see isSchemeRestricted:) so a
+    // case-variant probe ("Cydia" vs "cydia") can never bypass a
+    // scheme rule.
+    ruleset->set_urlschemes = [self lowercaseSetFromArray:urlschemes];
+  }
+
+  NSArray *whitelist_paths =
+      [self validatedStringArray:[payload objectForKey:@"WhitelistExactPaths"]
+                          forKey:@"WhitelistExactPaths"];
+
+  if (whitelist_paths) {
+    ruleset->set_whitelist = [NSSet setWithArray:whitelist_paths];
+  }
+
+  NSArray *blacklist_paths =
+      [self validatedStringArray:[payload objectForKey:@"BlacklistExactPaths"]
+                          forKey:@"BlacklistExactPaths"];
+
+  if (blacklist_paths) {
+    ruleset->set_blacklist = [NSSet setWithArray:blacklist_paths];
+  }
+
+  NSArray *whitelist_prefixes =
+      [self validatedStringArray:[payload objectForKey:@"WhitelistPaths"]
+                          forKey:@"WhitelistPaths"];
+
+  if (whitelist_prefixes) {
+    ruleset->dict_whitelist =
+        [self compilePrefixDict:whitelist_prefixes
+                       matchAll:&ruleset->whitelist_match_all];
+  }
+
+  NSArray *blacklist_prefixes =
+      [self validatedStringArray:[payload objectForKey:@"BlacklistPaths"]
+                          forKey:@"BlacklistPaths"];
+
+  if (blacklist_prefixes) {
+    ruleset->dict_blacklist =
+        [self compilePrefixDict:blacklist_prefixes
+                       matchAll:&ruleset->blacklist_match_all];
+  }
+
+  NSDictionary *structure =
+      [self validatedStructure:[payload objectForKey:@"FileSystemStructure"]];
+
+  if (structure) {
+    ruleset->array_structure_dirs = [structure objectForKey:@"dirs"];
+    ruleset->array_structure_paths = [structure objectForKey:@"paths"];
+  }
+
+  // C0-3: bundle-ID blacklist, normalized to lowercase at load (matches the
+  // scheme normalization above) so case-variant bundle-ID probes can never
+  // bypass a rule.
+  NSArray *bundleids =
+      [self validatedStringArray:[payload objectForKey:@"BlacklistBundleIDs"]
+                          forKey:@"BlacklistBundleIDs"];
+
+  if (bundleids) {
+    ruleset->set_bundleids = [self lowercaseSetFromArray:bundleids];
+  }
+
+  NSArray *whitelist_preds =
+      [self validatedStringArray:[payload objectForKey:@"WhitelistPredicates"]
+                          forKey:@"WhitelistPredicates"];
+
+  if (whitelist_preds) {
+    ruleset->pred_whitelist = [self orPredicateFromStrings:whitelist_preds];
+  }
+
+  NSArray *blacklist_preds =
+      [self validatedStringArray:[payload objectForKey:@"BlacklistPredicates"]
+                          forKey:@"BlacklistPredicates"];
+
+  if (blacklist_preds) {
+    ruleset->pred_blacklist = [self orPredicateFromStrings:blacklist_preds];
+  }
+}
+
+// Normalizes prefix rules exactly like the old _normalizePaths (trim, strip
+// trailing slash) and groups them by parent directory: parent -> set of full
+// prefixes. A bare "/" entry matches every path (same as hasFilenamePrefix)
+// and is recorded in *outMatchAll instead of the dict. Verbatim move of the
+// old -[RulesetEngine _compilePrefixDict:matchAll:].
++ (NSDictionary<NSString *, NSSet<NSString *> *> *)
+    compilePrefixDict:(NSArray<NSString *> *)paths
+             matchAll:(BOOL *)outMatchAll {
+  NSMutableDictionary *dict = [NSMutableDictionary new];
+  BOOL match_all = NO;
+
+  for (NSString *raw in paths) {
+    NSString *entry = [raw
+        stringByTrimmingCharactersInSet:[NSCharacterSet
+                                            whitespaceAndNewlineCharacterSet]];
+
+    if ([entry length] == 0) {
+      continue;
+    }
+
+    if (![entry isEqualToString:@"/"] && [entry hasSuffix:@"/"]) {
+      entry = [entry substringToIndex:[entry length] - 1];
+    }
+
+    if ([entry isEqualToString:@"/"]) {
+      match_all = YES;
+      continue;
+    }
+
+    NSString *parent = [entry stringByDeletingLastPathComponent];
+    NSMutableSet *bucket = [dict objectForKey:parent];
+
+    if (!bucket) {
+      bucket = [NSMutableSet new];
+      [dict setObject:bucket forKey:parent];
+    }
+
+    [bucket addObject:entry];
+  }
+
+  *outMatchAll = match_all;
+  return dict;
+}
+@end

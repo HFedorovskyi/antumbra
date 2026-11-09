@@ -1,0 +1,194 @@
+#!/bin/sh
+
+if [ "${SHADOW_DPKG_ROOT+x}" = x ]; then
+    DPKG_ROOT=$SHADOW_DPKG_ROOT
+else
+    DPKG_ROOT=""
+    case "$DPKG_MAINTSCRIPT_ARCH" in
+        iphoneos-arm64) DPKG_ROOT="/var/jb" ;;
+    esac
+fi
+if [ "${SHADOW_ROOTFS_ROOT+x}" = x ]; then
+    ROOTFS_ROOT=$SHADOW_ROOTFS_ROOT
+else
+    ROOTFS_ROOT=""
+    case "$DPKG_MAINTSCRIPT_ARCH" in
+        iphoneos-arm64e) ROOTFS_ROOT="/rootfs" ;;
+    esac
+fi
+
+DAEMON_PATH="$DPKG_ROOT/usr/libexec/shadowd"
+DAEMON_JOB="system/me.jjolano.shadow"
+LEGACY_LEDGER="$DPKG_ROOT/var/mobile/Library/Preferences/me.jjolano.shadowd/shadowd.ledger"
+LEGACY_LEDGER_DIR="$DPKG_ROOT/var/mobile/Library/Preferences/me.jjolano.shadowd"
+LEGACY_LOG="$DPKG_ROOT/var/log/shadowd.log"
+LAUNCHCTL_BIN=${SHADOW_LAUNCHCTL_BIN:-launchctl}
+PS_BIN=${SHADOW_PS_BIN:-/bin/ps}
+SLEEP_BIN=${SHADOW_SLEEP_BIN:-sleep}
+
+shadowd_job_output() {
+    "$LAUNCHCTL_BIN" print "$DAEMON_JOB" 2>/dev/null || true
+}
+
+shadowd_job_program() {
+    shadowd_job_output | sed -n 's/^[[:space:]]*program = //p' | head -1
+}
+
+shadowd_job_pid() {
+    shadowd_job_output | sed -n 's/^[[:space:]]*pid = //p' | head -1
+}
+
+shadowd_exact_pids() {
+    "$PS_BIN" -ax -o pid=,comm= 2>/dev/null |
+    while read -r pid comm rest; do
+        case "$pid" in ''|*[!0-9]*) continue ;; esac
+        [ -z "$rest" ] || continue
+        [ "$comm" = "$DAEMON_PATH" ] || continue
+        printf '%s\n' "$pid"
+    done
+}
+
+shadowd_job_state() {
+    program=$(shadowd_job_program)
+    [ -n "$program" ] || { printf '%s\n' absent; return; }
+    [ "$program" = "$DAEMON_PATH" ] || { printf '%s\n' mismatch; return; }
+    pid=$(shadowd_job_pid)
+    case "$pid" in ''|*[!0-9]*) printf '%s\n' exact-idle ;; *) printf '%s\n' exact-live ;; esac
+}
+
+shadowd_stop() {
+    state=$(shadowd_job_state)
+    [ "$state" != mismatch ] || return 1
+    if [ "$state" = exact-live ]; then
+        "$LAUNCHCTL_BIN" kill SIGTERM "$DAEMON_JOB" 2>/dev/null || return 1
+    fi
+    pids=$(shadowd_exact_pids)
+    for pid in $pids; do
+        kill -TERM "$pid" 2>/dev/null || return 1
+    done
+    remaining=20
+    while [ "$remaining" -gt 0 ]; do
+        state=$(shadowd_job_state)
+        [ "$state" != mismatch ] || return 1
+        pids=$(shadowd_exact_pids)
+        [ "$state" != exact-live ] && [ -z "$pids" ] && return 0
+        "$SLEEP_BIN" 1
+        remaining=$((remaining - 1))
+    done
+    return 1
+}
+
+shadowd_bootout() {
+    state=$(shadowd_job_state)
+    [ "$state" != mismatch ] || return 1
+    case "$state" in
+        absent) return 0 ;;
+        exact-idle)
+            "$LAUNCHCTL_BIN" bootout "$DAEMON_JOB" 2>/dev/null \
+                || "$LAUNCHCTL_BIN" unload "$DPKG_ROOT/Library/LaunchDaemons/me.jjolano.shadow.plist" 2>/dev/null
+        ;;
+        exact-live) return 1 ;;
+    esac
+}
+
+# The backend-free package must not carry forward the old daemon's durable
+# state.  Only remove it after the exact old job and process are gone; a
+# label collision or a live exact process is an upgrade failure, not a reason
+# to erase a recovery record.
+shadowd_remove_legacy_state() {
+    state=$(shadowd_job_state)
+    [ "$state" != mismatch ] || return 1
+    case "$state" in
+        absent) ;;
+        exact-idle)
+            "$LAUNCHCTL_BIN" bootout "$DAEMON_JOB" 2>/dev/null || return 1
+        ;;
+        exact-live) return 1 ;;
+    esac
+    [ -z "$(shadowd_exact_pids)" ] || return 1
+    rm -f "$LEGACY_LEDGER" "$LEGACY_LOG"
+    rmdir "$LEGACY_LEDGER_DIR" 2>/dev/null || true
+}
+
+case "$1" in
+    configure)
+        mkdir -p "$ROOTFS_ROOT/var/mobile/Library/Preferences"
+        touch "$ROOTFS_ROOT/var/mobile/Library/Preferences/me.jjolano.shadow.plist"
+        # Perms oracle note (Finding 5): this stays root:wheel 0644 on purpose.
+        # 0600 would break sandboxed reads — the in-process file fallback
+        # (Settings.m:99-102, dylib.x:63-69) runs as mobile and needs o+r, and
+        # libSandy's file grant is a sandbox extension, not a DAC override, so
+        # group/other-read is required. In-process reads stay indistinguishable
+        # from stock ENOENT via the JailbreakMisc blacklist; only out-of-band
+        # readers can observe the mode bits.
+        chown root:wheel "$ROOTFS_ROOT/var/mobile/Library/Preferences/me.jjolano.shadow.plist"
+        chmod 0644 "$ROOTFS_ROOT/var/mobile/Library/Preferences/me.jjolano.shadow.plist"
+
+        rm -f "$DPKG_ROOT/Library/MobileSubstrate/DynamicLibraries/ShadowCore.dylib" \
+              "$DPKG_ROOT/usr/lib/TweakInject/ShadowCore.dylib"
+        chown -R root:wheel "$DPKG_ROOT/Library/Shadow"
+        chmod -R u=rwX,go=rX "$DPKG_ROOT/Library/Shadow"
+        "$DPKG_ROOT/usr/local/bin/shdw" -g >/dev/null 2>&1 || true
+
+        if [ -f "$DPKG_ROOT/Library/LaunchDaemons/me.jjolano.shadow.plist" ] && [ -f "$DAEMON_PATH" ]; then
+            chown root:wheel "$DPKG_ROOT/Library/LaunchDaemons/me.jjolano.shadow.plist" "$DAEMON_PATH"
+            chmod 644 "$DPKG_ROOT/Library/LaunchDaemons/me.jjolano.shadow.plist"
+            chmod 755 "$DAEMON_PATH"
+            mkdir -p "$DPKG_ROOT/var/log"
+            # Files can only be here as leftovers (this package ships no
+            # backend): stop the old job and leave it stopped. Never bootstrap
+            # it — the old plist carries RunAtLoad/KeepAlive, so a bootstrap
+            # makes it live again, which both contradicts the state purge below
+            # (which ABORTS configure for a live exact job) and restarts a
+            # backend this package deliberately removed.
+            if ! shadowd_stop || ! shadowd_bootout; then
+                echo "shadowd: exact daemon did not cleanly exit; ABORTING configure." >&2
+                exit 1
+            fi
+        fi
+
+        if ! shadowd_remove_legacy_state; then
+            echo "shadowd: legacy backend state is still active; ABORTING configure." >&2
+            exit 1
+        fi
+
+        if [ -f "$DPKG_ROOT/Library/LaunchDaemons/me.fedorovskyi.antumbra.watcher.plist" ] && [ -f "$DPKG_ROOT/usr/local/bin/shdw" ]; then
+            chown root:wheel "$DPKG_ROOT/Library/LaunchDaemons/me.fedorovskyi.antumbra.watcher.plist" "$DPKG_ROOT/usr/local/bin/shdw"
+            chmod 644 "$DPKG_ROOT/Library/LaunchDaemons/me.fedorovskyi.antumbra.watcher.plist"
+            chmod 755 "$DPKG_ROOT/usr/local/bin/shdw"
+            # The job labels moved with the rename; a surviving old job would
+            # keep the previous binary mapped next to the new one.
+            "$LAUNCHCTL_BIN" bootout system/me.fedorovskyi.shadow.watcher 2>/dev/null || true
+            "$LAUNCHCTL_BIN" bootout user/501/me.fedorovskyi.shadow.watcher 2>/dev/null || true
+            "$LAUNCHCTL_BIN" bootout system/me.fedorovskyi.antumbra.watcher 2>/dev/null || true
+            "$LAUNCHCTL_BIN" bootstrap system "$DPKG_ROOT/Library/LaunchDaemons/me.fedorovskyi.antumbra.watcher.plist" 2>/dev/null \
+                || "$LAUNCHCTL_BIN" load -w "$DPKG_ROOT/Library/LaunchDaemons/me.fedorovskyi.antumbra.watcher.plist" 2>/dev/null \
+                || true
+        fi
+
+        if [ -f "$DPKG_ROOT/usr/local/bin/shdwbl" ] && [ -f "$DPKG_ROOT/Library/LaunchDaemons/me.fedorovskyi.antumbra.blacklistd.plist" ]; then
+            chown root:wheel "$DPKG_ROOT/Library/LaunchDaemons/me.fedorovskyi.antumbra.blacklistd.plist" "$DPKG_ROOT/usr/local/bin/shdwbl"
+            chmod 644 "$DPKG_ROOT/Library/LaunchDaemons/me.fedorovskyi.antumbra.blacklistd.plist"
+            chmod 755 "$DPKG_ROOT/usr/local/bin/shdwbl"
+            mkdir -p "$DPKG_ROOT/var/log"
+            # An upgrade must run the new binary, not the one launchd mapped.
+            "$LAUNCHCTL_BIN" bootout user/501/me.jjolano.shadow.blacklistd 2>/dev/null || true
+            "$LAUNCHCTL_BIN" bootout system/me.jjolano.shadow.blacklistd 2>/dev/null || true
+            "$LAUNCHCTL_BIN" bootout user/501/me.fedorovskyi.shadow.blacklistd 2>/dev/null || true
+            "$LAUNCHCTL_BIN" bootout system/me.fedorovskyi.shadow.blacklistd 2>/dev/null || true
+            "$LAUNCHCTL_BIN" bootout user/501/me.fedorovskyi.antumbra.blacklistd 2>/dev/null || true
+            "$LAUNCHCTL_BIN" bootout system/me.fedorovskyi.antumbra.blacklistd 2>/dev/null || true
+            "$LAUNCHCTL_BIN" bootstrap system "$DPKG_ROOT/Library/LaunchDaemons/me.fedorovskyi.antumbra.blacklistd.plist" 2>/dev/null || true
+            "$SLEEP_BIN" 1
+            if ! "$LAUNCHCTL_BIN" print user/501/me.fedorovskyi.antumbra.blacklistd >/dev/null 2>&1 \
+               && ! "$LAUNCHCTL_BIN" print system/me.fedorovskyi.antumbra.blacklistd >/dev/null 2>&1; then
+                echo "blacklistd: launchd job did not load" >&2
+            fi
+        fi
+    ;;
+    triggered)
+        "$DPKG_ROOT/usr/local/bin/shdw" -g >/dev/null 2>&1 || true
+    ;;
+esac
+
+exit 0

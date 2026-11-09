@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>me.fedorovskyi.antumbra.blacklistd</string>
+	<key>ProgramArguments</key>
+	<array>
+		<!-- Direct exec of a jb daemon on iOS 18 gets launchd's container deny
+		     profile (EPERM on /private/var/mobile/Containers/Data/Application),
+		     so the container scan cannot see app requests. Started through a
+		     shell, the same binary reads them. Keep the wrapper. -->
+		<string>/var/jb/bin/bash</string>
+		<string>-c</string>
+		<string>exec /var/jb/usr/local/bin/shdwbl -d</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>5</integer>
+	<key>StandardOutPath</key>
+	<string>/var/jb/var/log/shdw-blacklistd.log</string>
+	<key>StandardErrorPath</key>
+	<string>/var/jb/var/log/shdw-blacklistd.log</string>
+</dict>
+</plist>
