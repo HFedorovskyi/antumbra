@@ -9,7 +9,7 @@
 Antumbra is a fork of [Shadow](https://github.com/jjolano/shadow) © 2023 jjolano
 (BSD-3-Clause): a jailbreak detection bypass hardened for iOS 15–18 and rootless
 Dopamine, with its own **English / Russian** pane language switch. Ships as
-`me.fedorovskyi.antumbra` (`4.1.0`).
+`me.fedorovskyi.antumbra` (`4.1.1`).
 
 Not affiliated with, sponsored by or endorsed by the original author. The core's
 internal names (Shadow.framework, ShadowCore.dylib, Shadow.dylib, the
@@ -111,7 +111,7 @@ inside every package.
 Antumbra — форк [Shadow](https://github.com/jjolano/shadow) © 2023 jjolano
 (BSD-3-Clause): обход детекта джейлбрейка, усиленный под iOS 15–18 и rootless
 Dopamine, с отдельным переключателем языка панели **English / Русский**.
-Ставится как `me.fedorovskyi.antumbra` (версия `4.1.0`).
+Ставится как `me.fedorovskyi.antumbra` (версия `4.1.1`).
 
 Проект не связан с автором оригинала и не одобрен им. Внутренние имена ядра
 (Shadow.framework, ShadowCore.dylib, Shadow.dylib, домен настроек
