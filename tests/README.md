@@ -58,7 +58,6 @@ architecture/deployment/ABI fixtures and reject mismatches, legacy lock imports,
 and invalid RootHide linking. These test the checker, not actual iOS execution.
 Packaged lane builds separately run the checker against their real binaries.
 
-The full engine/detector/adversary/fuzz/device harness is private and
-not part of this repo (no URL). The engine-linked batteries were removed
-from `tests/Makefile`. For local harness discovery, follow `AGENTS.md`; neither
-host checks nor an old harness executable verify the installed iOS harness UI.
+The engine-linked batteries are not part of this repo and were removed from
+`tests/Makefile`. Neither the host checks nor an old harness executable verify
+the installed iOS harness UI.
