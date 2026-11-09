@@ -1,32 +1,27 @@
-# Antumbra — hardened fork of Shadow (iOS 15–18)
+# Antumbra — форк Shadow для iOS 15–18
 
-**RU** — Antumbra — это форк [Shadow](https://github.com/jjolano/shadow)
-© 2023 jjolano (BSD-3-Clause): обход детекта джейлбрейка, усиленный под
-iOS 15–18 и rootless Dopamine, с отдельным переключателем языка панели
-**English / Русский**. Ставится как `me.fedorovskyi.antumbra`
-(версия `4.1.0`). Проект не связан с автором оригинала и не одобрен им;
-внутренние имена ядра (Shadow.framework, ShadowCore.dylib, Shadow.dylib,
-домен настроек `me.jjolano.shadow`) сохранены для совместимости с уже
-проверенными линиями инъекции и прежними установками. Лицензия —
-BSD-3-Clause, полные тексты в [LICENSE](LICENSE) и [NOTICE](NOTICE).
+**[Русский](#русский) · [English](#english)**
 
-**EN** — Antumbra is a fork of [Shadow](https://github.com/jjolano/shadow)
-© 2023 jjolano (BSD-3-Clause): a jailbreak detection bypass hardened for
-iOS 15–18 and rootless Dopamine, with its own **English / Russian** pane
-language switch. Ships as `me.fedorovskyi.antumbra`
-(`4.1.0`). Not affiliated with, sponsored by or endorsed by the original
-author; the core's internal names (Shadow.framework, ShadowCore.dylib,
-Shadow.dylib, the `me.jjolano.shadow` prefs domain) are kept so verified
-injection lanes and existing installations keep working. Licensed
-BSD-3-Clause, see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+---
 
-## Что добавлено / What this fork adds
+## Русский
 
-**RU**
+Antumbra — форк [Shadow](https://github.com/jjolano/shadow) © 2023 jjolano
+(BSD-3-Clause): обход детекта джейлбрейка, усиленный под iOS 15–18 и rootless
+Dopamine, с отдельным переключателем языка панели **English / Русский**.
+Ставится как `me.fedorovskyi.antumbra` (версия `4.1.0`).
+
+Проект не связан с автором оригинала и не одобрен им. Внутренние имена ядра
+(Shadow.framework, ShadowCore.dylib, Shadow.dylib, домен настроек
+`me.jjolano.shadow`) сохранены, чтобы уже проверенные линии инъекции и прежние
+установки продолжали работать. Лицензия — BSD-3-Clause, полные тексты в
+[LICENSE](LICENSE) и [NOTICE](NOTICE).
+
+### Что добавлено
 
 * Отдельный переключатель языка панели: **English** (по умолчанию) и
-  **Русский**; выбор хранится в `UILanguage` и не зависит от системной
-  локали — панель больше не наследует русский от устройства.
+  **Русский**; выбор хранится в `UILanguage` и не зависит от системной локали —
+  панель больше не наследует русский от устройства.
 * Новое имя и логотип Antumbra, отдельный идентификатор пакета
   `me.fedorovskyi.antumbra` и свои launchd-лейблы.
 * Дополнительные adapter'ы для сторонних детекторов и общий слой подмены
@@ -40,11 +35,96 @@ BSD-3-Clause, see [LICENSE](LICENSE) and [NOTICE](NOTICE).
   (`/var/jb/usr/share/doc/me.fedorovskyi.antumbra/copyright`) и строку
   `Core Author: jjolano` на странице About.
 
-**EN**
+### Установка
 
-* A dedicated pane-language switch: **English** (default) and **Russian**;
-  the choice lives in `UILanguage` and ignores the system locale, so a
-  Russian device no longer forces a Russian pane.
+Возьми `.deb` из [Releases](https://github.com/HFedorovskyi/antumbra/releases)
+и поставь через Sileo/Zebra/Filza или `dpkg -i`. Нужны `AltList`, `libSandy`
+(opa334) и `HookKit >= 3.0.4` (jjolano); рекомендуется `Injection Foundation`
+(PoomSmart).
+
+* С апстрима `me.jjolano.shadow` Antumbra ставится напрямую: пакет объявляет
+  `Provides`/`Replaces`/`Conflicts` и заменяет его без `--force`.
+* С прошлого форка `me.fedorovskyi.shadow` (4.0.39~hf1 и раньше) сначала удали
+  старый пакет: `dpkg -r me.fedorovskyi.shadow`, затем поставь
+  `me.fedorovskyi.antumbra`. Старый пакет сам конфликтует с общим `Provides`,
+  поэтому `dpkg -i` поверх него откажется.
+* Настройки и списки исключений сохраняются: домен prefs не меняется. Если
+  `dpkg -l` показывает `rc  me.fedorovskyi.shadow` или `ic  me.jjolano.shadow`,
+  запись убирается командой `dpkg -P <имя>`.
+
+### Использование
+
+Настройки → Antumbra. Глобальные переключатели и настройки по приложениям; язык
+панели переключается там же (English по умолчанию). `shdw -d` синхронизирует
+ruleset приложений.
+
+### Совместимость
+
+| Лейн | Пакет | iOS | Проверено |
+| --- | --- | --- | --- |
+| Rootless | `iphoneos-arm64` | **15.0 – 18.x** | 18.6.2, Dopamine 3 |
+| Rootful modern | `iphoneos-arm` | 14.0 – 18.x | не проверялся |
+| RootHide | `iphoneos-arm64e` | 15.0 – 17.x | не проверялся |
+| Rootful legacy | `iphoneos-arm` (`me.fedorovskyi.antumbra.legacy`) | 9.0 – 13.x | не проверялся |
+
+Диапазоны взяты из control-файлов: rootless и rootful-modern декларируют
+`firmware (>= …)` без потолка и включают iOS 18, RootHide ограничен `<< 18.0`,
+rootful-legacy — `9.0 – 13.x`. На устройстве проверен только rootless-лейн на
+iOS 18.6.2 (Dopamine 3): панель, watcher, blacklistd, инъекция в сторонние
+приложения. Остальные лейны собираются в CI и проходят проверки метаданных и
+Mach-O, но не проверялись на живых устройствах; открытый диапазон не обещает
+совместимость с будущими релизами iOS.
+
+### Если что-то не работает
+
+* Отключи другие твики для конкретного приложения (Choicy).
+* Откати версию приложения; не ставь несколько bypass-твиков сразу.
+* Rootless/semi-untethered: проверяй в обычном (неджейлбрейкнутом) состоянии,
+  чтобы отделить проблему от самого джейлбрейка.
+
+### Сборка
+
+Нужны [Theos](https://theos.dev) и тулчейн `modern21` для arm64e preference
+bundle:
+
+```sh
+MODERN_TOOLCHAIN=/opt/theos/toolchain/modern21/linux/iphone \
+    /opt/theos/bin/setup-modern-toolchain.sh /usr/bin/clang-21
+.github/scripts/build-deps.sh rootless
+./build.sh rootless
+```
+
+Лейны: `rootful-legacy`, `rootful-modern`, `rootless`, `roothide`; матрица — в
+`build-support/lanes.sh`. Тесты: `make -C tests test`
+([подробности](tests/README.md)).
+
+### Лицензия
+
+Код апстрима: Copyright (c) 2023, jjolano, BSD 3-Clause. Изменения форка:
+Copyright (c) 2026, HRYHORII FEDOROVSKYI, та же лицензия. См. [LICENSE](LICENSE)
+и [NOTICE](NOTICE); текст лицензии, условия и отказ от гарантий также лежат
+внутри каждого пакета.
+
+---
+
+## English
+
+Antumbra is a fork of [Shadow](https://github.com/jjolano/shadow) © 2023 jjolano
+(BSD-3-Clause): a jailbreak detection bypass hardened for iOS 15–18 and rootless
+Dopamine, with its own **English / Russian** pane language switch. Ships as
+`me.fedorovskyi.antumbra` (`4.1.0`).
+
+Not affiliated with, sponsored by or endorsed by the original author. The core's
+internal names (Shadow.framework, ShadowCore.dylib, Shadow.dylib, the
+`me.jjolano.shadow` prefs domain) are kept so verified injection lanes and
+existing installations keep working. Licensed BSD-3-Clause, see
+[LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+### What this fork adds
+
+* A dedicated pane-language switch: **English** (default) and **Russian**; the
+  choice lives in `UILanguage` and ignores the system locale, so a Russian
+  device no longer forces a Russian pane.
 * New Antumbra name and icon, its own package identifier
   `me.fedorovskyi.antumbra` and launchd labels.
 * Extra adapters for third-party detection SDKs and a shared filesystem/system
@@ -58,24 +138,9 @@ BSD-3-Clause, see [LICENSE](LICENSE) and [NOTICE](NOTICE).
   (`/var/jb/usr/share/doc/me.fedorovskyi.antumbra/copyright`) and a
   `Core Author: jjolano` row on the About page.
 
-## Установка / Install
+### Install
 
-**RU** — Возьми `.deb` из [Releases](https://github.com/HFedorovskyi/antumbra/releases)
-и поставь через Sileo/Zebra/Filza или `dpkg -i`. Нужны `AltList`, `libSandy`
-(opa334) и `HookKit >= 3.0.4` (jjolano); рекомендуется `Injection Foundation`
-(PoomSmart).
-
-* С апстрима `me.jjolano.shadow` Antumbra ставится напрямую: пакет объявляет
-  `Provides`/`Replaces`/`Conflicts` и заменяет его без `--force`.
-* С прошлого форка `me.fedorovskyi.shadow` (4.0.39~hf1 и раньше) сначала
-  удали старый пакет: `dpkg -r me.fedorovskyi.shadow`, затем поставь
-  `me.fedorovskyi.antumbra`. Старый пакет сам конфликтует с общим
-  `Provides`, поэтому `dpkg -i` поверх него откажется.
-* Настройки и списки исключений сохраняются: домен prefs не меняется.
-  Если `dpkg -l` показывает `rc  me.fedorovskyi.shadow` или
-  `ic  me.jjolano.shadow`, запись убирается командой `dpkg -P <имя>`.
-
-**EN** — Grab the `.deb` from [Releases](https://github.com/HFedorovskyi/antumbra/releases)
+Grab the `.deb` from [Releases](https://github.com/HFedorovskyi/antumbra/releases)
 and install it with Sileo/Zebra/Filza or `dpkg -i`. Needs `AltList` + `libSandy`
 (opa334) and `HookKit >= 3.0.4` (jjolano); `Injection Foundation` (PoomSmart) is
 recommended.
@@ -90,34 +155,22 @@ recommended.
   `dpkg -l` shows `rc  me.fedorovskyi.shadow` or `ic  me.jjolano.shadow`,
   clear the record with `dpkg -P <name>`.
 
-## Использование / Use
+### Use
 
-**RU** — Настройки → Antumbra. Глобальные переключатели и настройки по
-приложениям; язык панели переключается там же (English по умолчанию).
-`shdw -d` синхронизирует ruleset приложений.
+Settings → Antumbra. Global switches and per-app settings; the pane language is
+switched there as well (English by default). `shdw -d` keeps the app ruleset in
+sync.
 
-**EN** — Settings → Antumbra. Global switches and per-app settings; the pane
-language is switched there as well (English by default). `shdw -d` keeps the
-app ruleset in sync.
+### Compatibility
 
-## Совместимость / Compatibility
-
-| Лейн / Lane | Пакет / Package | iOS | Проверено / Tested |
+| Lane | Package | iOS | Tested |
 | --- | --- | --- | --- |
 | Rootless | `iphoneos-arm64` | **15.0 – 18.x** | 18.6.2, Dopamine 3 |
-| Rootful modern | `iphoneos-arm` | 14.0 – 18.x | нет / not tested |
-| RootHide | `iphoneos-arm64e` | 15.0 – 17.x | нет / not tested |
-| Rootful legacy | `iphoneos-arm` (`me.fedorovskyi.antumbra.legacy`) | 9.0 – 13.x | нет / not tested |
+| Rootful modern | `iphoneos-arm` | 14.0 – 18.x | not tested |
+| RootHide | `iphoneos-arm64e` | 15.0 – 17.x | not tested |
+| Rootful legacy | `iphoneos-arm` (`me.fedorovskyi.antumbra.legacy`) | 9.0 – 13.x | not tested |
 
-**RU** — Диапазоны взяты из control-файлов: rootless и rootful-modern декларируют
-`firmware (>= …)` без потолка и включают iOS 18, RootHide ограничен `<< 18.0`,
-rootful-legacy — `9.0 – 13.x`. На устройстве проверен только rootless-лейн на
-iOS 18.6.2 (Dopamine 3): панель, watcher, blacklistd, инъекция в сторонние
-приложения. Остальные лейны собираются в CI и проходят проверки метаданных и
-Mach-O, но не проверялись на живых устройствах; открытый диапазон не обещает
-совместимость с будущими релизами iOS.
-
-**EN** — Ranges come from the control files: rootless and rootful-modern declare
+Ranges come from the control files: rootless and rootful-modern declare
 `firmware (>= …)` with no ceiling and include iOS 18, RootHide is capped at
 `<< 18.0`, rootful-legacy is `9.0 – 13.x`. Only the rootless lane is tested on a
 device, on iOS 18.6.2 (Dopamine 3): pane, watcher, blacklistd, injection into
@@ -125,13 +178,13 @@ third-party apps. The other lanes are built in CI and pass metadata and Mach-O
 checks but have not been tested on live devices; an open-ended range does not
 promise support for future iOS releases.
 
-## Troubleshooting
+### Troubleshooting
 
 * Disable other tweaks per-app (Choicy).
 * Downgrade the app; don't stack multiple bypass tweaks.
 * Rootless/semi-untethered: test in stock jailed state to isolate.
 
-## Building
+### Building
 
 Requires [Theos](https://theos.dev) and the `modern21` toolchain for the arm64e
 preference bundle:
@@ -143,12 +196,13 @@ MODERN_TOOLCHAIN=/opt/theos/toolchain/modern21/linux/iphone \
 ./build.sh rootless
 ```
 
-Lanes: `rootful-legacy`, `rootful-modern`, `rootless`, `roothide`. See `build-support/lanes.sh` for the matrix. Tests: `make -C tests test` ([details](tests/README.md)).
+Lanes: `rootful-legacy`, `rootful-modern`, `rootless`, `roothide`. See
+`build-support/lanes.sh` for the matrix. Tests: `make -C tests test`
+([details](tests/README.md)).
 
-## Legal
+### Legal
 
 Upstream code: Copyright (c) 2023, jjolano, BSD 3-Clause. Fork modifications:
 Copyright (c) 2026, HRYHORII FEDOROVSKYI, same license. See [LICENSE](LICENSE)
 and [NOTICE](NOTICE); the notice, conditions and disclaimer are also shipped
 inside every package.
-
