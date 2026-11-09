@@ -11,29 +11,19 @@ Antumbra is a fork of [Shadow](https://github.com/jjolano/shadow) © 2023 jjolan
 Dopamine, with its own **English / Russian** pane language switch. Ships as
 `me.fedorovskyi.antumbra` (`4.1.1`).
 
-Not affiliated with, sponsored by or endorsed by the original author. The core's
-internal names (Shadow.framework, ShadowCore.dylib, Shadow.dylib, the
-`me.jjolano.shadow` prefs domain) are kept so verified injection lanes and
-existing installations keep working. Licensed BSD-3-Clause, see
-[LICENSE](LICENSE) and [NOTICE](NOTICE).
+Not affiliated with, sponsored by or endorsed by the original author. Internal
+core names and the prefs domain are kept so existing installations and settings
+keep working. Licensed BSD-3-Clause, see [LICENSE](LICENSE) and
+[NOTICE](NOTICE).
 
 ### What this fork adds
 
-* A dedicated pane-language switch: **English** (default) and **Russian**; the
-  choice lives in `UILanguage` and ignores the system locale, so a Russian
-  device no longer forces a Russian pane.
-* New Antumbra name and icon, its own package identifier
-  `me.fedorovskyi.antumbra` and launchd labels.
+* English/Russian pane switch, English by default.
 * Extra adapters for third-party detection SDKs and a shared filesystem/system
   query layer for iOS 18.
-* Root-side `shdwbl` daemon and CLI: per-app opt-out (`addb`/`removeb`/`status`),
-  Dopamine ProcessBlacklist reconciliation, package snapshots and rollback.
-* Rootless build: thin arm64 payload, arm64e preference bundle with
-  authenticated ObjC class references (iOS 18 otherwise traps in `readClass`),
-  enforced by `scripts/check-objc-binds.py` in CI.
-* Every release deb carries the license text
-  (`/var/jb/usr/share/doc/me.fedorovskyi.antumbra/copyright`) and a
-  `Core Author: jjolano` row on the About page.
+* Root-side `shdwbl` daemon and CLI: per-app opt-out, package snapshots and
+  rollback.
+* Rootless build: thin arm64 payload with an arm64e preference bundle.
 
 ### Install
 
@@ -67,13 +57,10 @@ sync.
 | RootHide | `iphoneos-arm64e` | 15.0 – 17.x | not tested |
 | Rootful legacy | `iphoneos-arm` (`me.fedorovskyi.antumbra.legacy`) | 9.0 – 13.x | not tested |
 
-Ranges come from the control files: rootless and rootful-modern declare
-`firmware (>= …)` with no ceiling and include iOS 18, RootHide is capped at
-`<< 18.0`, rootful-legacy is `9.0 – 13.x`. Only the rootless lane is tested on a
+Ranges come from the control files. Only the rootless lane is tested on a
 device, on iOS 18.6.2 (Dopamine 3): pane, watcher, blacklistd, injection into
-third-party apps. The other lanes are built in CI and pass metadata and Mach-O
-checks but have not been tested on live devices; an open-ended range does not
-promise support for future iOS releases.
+third-party apps. The other lanes are built in CI but untested on devices; an
+open-ended range does not promise support for future iOS releases.
 
 ### Troubleshooting
 
@@ -113,29 +100,19 @@ Antumbra — форк [Shadow](https://github.com/jjolano/shadow) © 2023 jjolan
 Dopamine, с отдельным переключателем языка панели **English / Русский**.
 Ставится как `me.fedorovskyi.antumbra` (версия `4.1.1`).
 
-Проект не связан с автором оригинала и не одобрен им. Внутренние имена ядра
-(Shadow.framework, ShadowCore.dylib, Shadow.dylib, домен настроек
-`me.jjolano.shadow`) сохранены, чтобы уже проверенные линии инъекции и прежние
-установки продолжали работать. Лицензия — BSD-3-Clause, полные тексты в
-[LICENSE](LICENSE) и [NOTICE](NOTICE).
+Проект не связан с автором оригинала и не одобрен им. Внутренние имена ядра и
+домен настроек сохранены, чтобы прежние установки и настройки продолжали
+работать. Лицензия — BSD-3-Clause, полные тексты в [LICENSE](LICENSE) и
+[NOTICE](NOTICE).
 
 ### Что добавлено
 
-* Отдельный переключатель языка панели: **English** (по умолчанию) и
-  **Русский**; выбор хранится в `UILanguage` и не зависит от системной локали —
-  панель больше не наследует русский от устройства.
-* Новое имя и логотип Antumbra, отдельный идентификатор пакета
-  `me.fedorovskyi.antumbra` и свои launchd-лейблы.
+* Переключатель языка панели: English/Russian, по умолчанию English.
 * Дополнительные adapter'ы для сторонних детекторов и общий слой подмены
   файловых/системных запросов для iOS 18.
-* Root-side демон `shdwbl` и CLI: per-app opt-out (`addb`/`removeb`/`status`),
-  сверка с ProcessBlacklist Dopamine, snapshots и откат обновлений пакета.
-* Сборка rootless: payload — thin arm64, preference bundle — arm64e с
-  аутентифицированными ObjC class-ссылками (иначе iOS 18 падает в `readClass`),
-  гейт `scripts/check-objc-binds.py` в CI.
-* Все релизные deb содержат текст лицензии
-  (`/var/jb/usr/share/doc/me.fedorovskyi.antumbra/copyright`) и строку
-  `Core Author: jjolano` на странице About.
+* Root-side демон `shdwbl` и CLI: per-app opt-out, snapshots и откат обновлений
+  пакета.
+* Сборка rootless: payload — thin arm64, preference bundle — arm64e.
 
 ### Установка
 
@@ -169,13 +146,11 @@ ruleset приложений.
 | RootHide | `iphoneos-arm64e` | 15.0 – 17.x | не проверялся |
 | Rootful legacy | `iphoneos-arm` (`me.fedorovskyi.antumbra.legacy`) | 9.0 – 13.x | не проверялся |
 
-Диапазоны взяты из control-файлов: rootless и rootful-modern декларируют
-`firmware (>= …)` без потолка и включают iOS 18, RootHide ограничен `<< 18.0`,
-rootful-legacy — `9.0 – 13.x`. На устройстве проверен только rootless-лейн на
-iOS 18.6.2 (Dopamine 3): панель, watcher, blacklistd, инъекция в сторонние
-приложения. Остальные лейны собираются в CI и проходят проверки метаданных и
-Mach-O, но не проверялись на живых устройствах; открытый диапазон не обещает
-совместимость с будущими релизами iOS.
+Диапазоны взяты из control-файлов. На устройстве проверен только rootless-лейн
+на iOS 18.6.2 (Dopamine 3): панель, watcher, blacklistd, инъекция в сторонние
+приложения. Остальные лейны собираются в CI, но не проверялись на живых
+устройствах; открытый диапазон не обещает совместимость с будущими релизами
+iOS.
 
 ### Если что-то не работает
 
